@@ -1,0 +1,10 @@
+{
+ "name": "pi-web-multigit-plugin",
+ "private": true,
+ "type": "module",
+ "description": "pi-web-ui plugin: read-only overview of every Git repository in the workspace",
+ "scripts": {
+  "test": "node tests/run.mjs",
+  "test:host": "node tests/run.mjs --only=host"
+ }
+}

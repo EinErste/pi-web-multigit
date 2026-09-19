@@ -1,0 +1,9 @@
+# Host-local state: the approval marker for this install, and per-install view state
+# (pane widths, folded segments, favourites, pane pivot). Neither belongs in the repo.
+.pi-approved
+storage.json
+
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

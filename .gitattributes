@@ -1,0 +1,3 @@
+# Keep LF in the repository: these are JS/JSON/Markdown files, and CRLF rewrites make every diff noisy.
+* text=auto eol=lf
+*.png binary
