@@ -19,7 +19,7 @@ plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.3     # pin a tag (any branch/tag works)
+pi-web-ui install EinErste/pi-web-multigit#v0.13.4     # pin a tag (any branch/tag works)
 pi-web-ui install EinErste/pi-web-multigit --force     # update in place
 pi-web-ui uninstall pi-web-multigit
 ```
@@ -32,10 +32,12 @@ hand works just as well.
 segments, favourites, pivot) and the consent marker in `.pi-approved`, so back both up before a forced
 reinstall. `pi-web-ui plugins --rollback pi-web-multigit` restores the newest pre-upgrade snapshot.
 
-**Requirements:** `git` on `PATH`, plus `node-pty`, which the host already ships (the terminal borrows
-the host's copy rather than vendoring one). Activation needs a host whose plugin API is `apiVersion: 2`
-— an older host refuses the plugin instead of half-loading it. Installs are refused on managed
-instances (`PI_WEB_MANAGED=1`), where plugins are the deployer's responsibility.
+**Requirements:** `git` on `PATH`, plus `node-pty` for the terminal strip. It prefers the copy the host
+already ships (same ConPTY machinery, nothing vendored) and falls back to `host.ensureDeps(["node-pty"])`
+— the documented dependency path, installed into the plugin directory and needing no extra capability —
+if a host ever stops shipping it. Activation needs a host whose plugin API is `apiVersion: 2`, so an
+older host refuses the plugin instead of half-loading it; installs are refused on managed instances
+(`PI_WEB_MANAGED=1`), where plugins are the deployer's responsibility.
 
 ## Where it shows up
 
@@ -114,8 +116,9 @@ branches are reported and left alone, and every result is listed (`updated` / `u
 / `skipped` / `blocked`). Both are two-click confirmed and followed by a rescan.
 
 **Terminal** — the **Terminal** button under the middle pane's tabs toggles a real PTY shell at the
-bottom of that pane (visibility persists). It uses the host's own `node-pty` and the same shell the
-host's Terminal tab uses, cwd = the selected repo: `vim` / `top` / `ssh` and REPLs work, Ctrl+C works,
+bottom of that pane (visibility persists). It uses the host's own `node-pty` — or a plugin-local copy
+installed through `host.ensureDeps` if the host ships none — and the same shell the host's Terminal
+tab uses, cwd = the selected repo: `vim` / `top` / `ssh` and REPLs work, Ctrl+C works,
 `TERM=xterm-256color`. One shell at a time, killed on hide / repo switch / deactivate; output is capped
 at 200KB per flush and 64KB per input message. The shell belongs to the client that opened it: another
 client (a second tab, or whoever else the server admits) cannot type into it, and only re-opening it —

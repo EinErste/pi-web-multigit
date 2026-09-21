@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_AUTO_REFRESH_SEC, GIT_CONCURRENCY, discover, firstLine, insideRepoReal, mapLimit, pathKey } from "./server/git.mjs";
 import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
-import { TERM_FLUSH_MS, TERM_MAX_COLS, TERM_MAX_INPUT, TERM_MAX_OUTPUT, TERM_MAX_ROWS, clampDim, loadNodePty, resolveShell } from "./server/pty.mjs";
+import { TERM_FLUSH_MS, TERM_MAX_COLS, TERM_MAX_INPUT, TERM_MAX_OUTPUT, TERM_MAX_ROWS, clampDim, ensureLocalNodePty, loadNodePty, resolveShell } from "./server/pty.mjs";
 import { repoSummary, resolveOptions } from "./server/repos.mjs";
 import { stopRegexWorker } from "./server/regex-match.mjs";
 
@@ -193,7 +193,17 @@ export default definePlugin({
 		try {
 			ptyMod = loadNodePty();
 		} catch (err) {
-			host.log("warn", "terminal unavailable", err?.message ?? String(err));
+			/**
+			 * The host's own copy is the fast path (same ConPTY machinery) but it is not a documented
+			 * contract; host.ensureDeps is. Off the activation path on purpose — a first install
+			 * compiles native code, and until it lands the strip says "cannot start a shell".
+			 */
+			host.log("warn", "no host node-pty — trying a plugin-local install", err?.message ?? String(err));
+			void ensureLocalNodePty(host).then((mod) => {
+				if (!mod) return;
+				ptyMod = mod;
+				host.log("info", "node-pty (plugin-local) ready — the terminal strip is available");
+			});
 		}
 		const term = { pty: null, repo: null, clientId: null, seq: 0, outBuf: "", flushTimer: null };
 

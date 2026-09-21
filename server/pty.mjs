@@ -5,7 +5,8 @@
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 export const isWindows = process.platform === "win32";
@@ -97,3 +98,57 @@ export function clampDim(value, fallback, max) {
 
 /* ---------------- node-pty resolution (the host already ships it) ---------------- */
 export let cachedPty = null;
+
+/**
+ * The plugin-local install root. `host.ensureDeps` (the documented dependency path) installs
+ * into <pluginDir>/node_modules, so that is where the fallback below looks.
+ */
+export function pluginDir() {
+	return join(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+/** Require `node-pty` out of one install root, by absolute path — never by bare name. */
+export function loadNodePtyFrom(base) {
+	return createRequire(join(base, "package.json"))("node-pty");
+}
+
+/**
+ * Fallback for a host that does not ship node-pty: borrowing the host's copy (loadNodePty) is
+ * not a documented contract, `host.ensureDeps` is, and it needs no extra capability.
+ *
+ * An already-installed copy is tried FIRST so the steady state costs one require and never
+ * touches npm. Returns null when there is no host support or the install fails — the caller
+ * keeps its plain "cannot start a shell" path and reports the reason in the strip.
+ *
+ * Deliberately not on the activation path: a first install compiles native code and can take
+ * minutes, so `deps` is injectable and the callers run it in the background / on demand.
+ */
+export async function ensureLocalNodePty(host, deps = {}) {
+	const local = deps.local ?? (() => loadNodePtyFrom(pluginDir()));
+	const ensure = deps.ensure ?? (typeof host?.ensureDeps === "function" ? host.ensureDeps.bind(host) : null);
+	const keep = (mod) => {
+		cachedPty = mod;
+		return mod;
+	};
+	try {
+		return keep(local());
+	} catch {
+		/* not installed yet — that is what ensureDeps is for */
+	}
+	if (!ensure) return null;
+	let installed = false;
+	try {
+		installed = await ensure(["node-pty"], {
+			onProgress: (text) => host?.log?.("info", String(text)),
+		});
+	} catch (err) {
+		host?.log?.("warn", "plugin-local node-pty install failed", err?.message ?? String(err));
+		return null;
+	}
+	if (!installed) return null;
+	try {
+		return keep(local());
+	} catch {
+		return null;
+	}
+}

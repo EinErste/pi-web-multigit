@@ -50,6 +50,7 @@ if (!repoCount) {
 const suites = only === "host" ? [["host-loader", "host-loader.test.mjs"]] : [
 	["server", "server.test.mjs"],
 	["client", "client.test.mjs"],
+	["pty-fallback", "pty-fallback.test.mjs"],
 	["host-loader", "host-loader.test.mjs"],
 ];
 
