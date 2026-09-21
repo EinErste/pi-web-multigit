@@ -48,16 +48,7 @@ instances (`PI_WEB_MANAGED=1`), where plugins are the deployer's responsibility.
 
 ## Layout
 
-```
-┌ ~/work/acme     [search all repos… (Enter)] [.*] [Search]        [⟳]       ┐
-├ Repositories ──┬ Changes │ History │ Branches │ Stashes │ Timeline [Term] ┬ Diff ─┤
-│ ● web-app  ↑1 │ (tab content…)                                        │ …    │
-│                │ ┌─ terminal · web-app ───────────────┐                │       │
-│                │ │ $ git status --short               │                │       │
-│                │ └────────────────────────────────────┘                │       │
-└────────────────┴───────────────────────────────────────────────────────┴───────┘
-        ↕  drag the two thin dividers between the panes to resize
-```
+<img width="2557" height="1181" alt="Screenshot_1" src="https://github.com/user-attachments/assets/ab96c865-541e-4ec7-882b-2c499aea8e63" />
 
 The middle pane's tabs switch what it lists; the Diff pane on the right explains whatever row is picked
 anywhere in the view.
