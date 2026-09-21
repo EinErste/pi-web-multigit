@@ -15,11 +15,11 @@ file's local changes).
 
 pi-web-ui plugins are distributed as GitHub repositories, not as npm packages — the plugin catalogue
 only stores sources. Install, update and remove this one with the CLI, or from **⚙ Settings → UI
-plugins → plugin market → 添加插件** by pasting `EinErste/pi-web-multigit`:
+plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`:
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.2     # pin a tag (any branch/tag works)
+pi-web-ui install EinErste/pi-web-multigit#v0.13.3     # pin a tag (any branch/tag works)
 pi-web-ui install EinErste/pi-web-multigit --force     # update in place
 pi-web-ui uninstall pi-web-multigit
 ```
