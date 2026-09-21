@@ -156,7 +156,8 @@ termClear.title = "Clear terminal output";
 termHead.append(termTitle, termClear);
 const termHost = h("div", "mg-term-host");
 const termHint = h("div", "mg-term-hint", "the shell starts when a repository is selected");
-termEl.append(termHead, termHost, termHint);
+const termGrip = h("div", "mg-term-grip"); // the strip's top edge: drag / arrow keys resize it
+termEl.append(termGrip, termHead, termHost, termHint);
 detailPane.append(detailHead, detailInfo, detailList, termEl);
 
 const diffPane = h("div", "mg-pane mg-pane-fixed mg-diff");
@@ -173,5 +174,5 @@ body.append(reposPane, split1, detailPane, split2, diffPane);
 const foot = h("div", "mg-foot");
 root.append(head, body, foot);
 
-	return { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termHead, termHint, termHost, termTitle, termToggle };
+	return { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termGrip, termHead, termHint, termHost, termTitle, termToggle };
 }

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { relative } from "node:path";
 import { BRANCHES_MAX_PER_REPO, BRANCH_UNPUSHED_COMMITS, BRANCH_UNPUSHED_MAX, BUILTIN_SKIP, DEFAULT_AUTO_REFRESH_SEC, DEFAULT_DEPTH, DEFAULT_MAX_REPOS, FETCH_TIMEOUT_MS, GIT_MAX_OUTPUT, execFileAsync, firstLine, git } from "./git.mjs";
 import { countFiles, parseBranchVV, parseMergedBranches, parseShortCommits, parseStatusFiles, parseStatusHeader, parseWorktreePaths } from "./parsers.mjs";
-import { GROUP_MODES, SORT_MODES, asBool, normPattern, normPatternMap, normStrings, normWidths, numOr, oneOf, splitList } from "./prefs.mjs";
+import { GROUP_MODES, SORT_MODES, asBool, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, oneOf, splitList } from "./prefs.mjs";
 
 
 export function resolveOptions(host) {
@@ -39,6 +39,7 @@ export function resolveOptions(host) {
 		autoRefreshSec: numOr(stored("autoRefreshSec", settings.autoRefreshSec), DEFAULT_AUTO_REFRESH_SEC, 0, 600),
 		hideClean: asBool(stored("hideClean", null), asBool(settings.hideClean, false)),
 		termVisible: asBool(stored("termVisible", null), false),
+		termHeight: normTermHeight(stored("termHeight", null)),
 		widths: normWidths(stored("widths", null)),
 		sort: oneOf(stored("sort", null), SORT_MODES, "name"),
 		group: oneOf(stored("group", null), GROUP_MODES, "none"),

@@ -19,7 +19,7 @@ plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.5     # pin a tag (any branch/tag works)
+pi-web-ui install EinErste/pi-web-multigit#v0.13.6     # pin a tag (any branch/tag works)
 pi-web-ui install EinErste/pi-web-multigit --force     # update in place
 pi-web-ui uninstall pi-web-multigit
 ```
@@ -115,7 +115,9 @@ branches are reported and left alone, and every result is listed (`updated` / `u
 / `skipped` / `blocked`). Both are two-click confirmed and followed by a rescan.
 
 **Terminal** — the **Terminal** button under the middle pane's tabs toggles a real PTY shell at the
-bottom of that pane (visibility persists). It uses the host's own `node-pty` — or a plugin-local copy
+bottom of that pane (visibility persists). Its **top edge is a drag handle**: pull it up for a taller
+strip — double-click resets it to the default 190px, arrow keys nudge it by 20px, and the height is
+remembered. It uses the host's own `node-pty` — or a plugin-local copy
 installed through `host.ensureDeps` if the host ships none — and the same shell the host's Terminal
 tab uses, cwd = the selected repo: `vim` / `top` / `ssh` and REPLs work, Ctrl+C works,
 `TERM=xterm-256color`. One shell at a time, killed on hide / repo switch / deactivate; output is capped
@@ -124,8 +126,10 @@ client (a second tab, or whoever else the server admits) cannot type into it, an
 a visible takeover that kills the previous shell — changes owner. A shell that cannot start says why in
 the strip instead of leaving an empty pane, and is retried at most once per ~20s.
 
-**Panes and keys** — the two dividers are drag handles (double-click resets, arrow keys move them); repos
-and diff stay pixel-fixed while the middle pane absorbs the remainder. Widths persist across sessions.
+**Panes and keys** — the two vertical dividers and the terminal's top edge are drag handles: each
+double-clicks back to its default, each takes arrow keys once focused, and every size is remembered.
+Repos and diff stay pixel-fixed while the middle pane absorbs the remainder, and the terminal can never
+grow so tall that the list above it disappears.
 `↑`/`↓` walk the repository list and `r` rescans. Every list marks the row the Diff pane is showing, so
 it always says what it is looking at.
 
@@ -266,5 +270,6 @@ silently asserts nothing is worse than no test. Steps that need a tracked change
 - Exactly one terminal exists at a time and it exits when the plugin does. Windows-only quirk: `node-pty`'s
   ConPTY agent sometimes prints a cosmetic `AttachConsole failed` on shell teardown — the host's own
   terminal does the same.
-- Pane widths and terminal visibility are per-plugin preferences (in `<pluginDir>/storage.json`), not
-  per-project.
+- Pane widths, the terminal's height and its visibility are per-plugin preferences (in
+  `<pluginDir>/storage.json`), not per-project. The strip is at least 120px tall and never taller than
+  the pane minus 140px, so the list above it always keeps room.

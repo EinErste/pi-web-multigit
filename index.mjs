@@ -38,7 +38,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_AUTO_REFRESH_SEC, GIT_CONCURRENCY, discover, firstLine, insideRepoReal, mapLimit, pathKey } from "./server/git.mjs";
-import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
+import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
 import { TERM_FLUSH_MS, TERM_MAX_COLS, TERM_MAX_INPUT, TERM_MAX_OUTPUT, TERM_MAX_ROWS, clampDim, ensureLocalNodePty, loadNodePty, resolveShell } from "./server/pty.mjs";
 import { repoSummary, resolveOptions } from "./server/repos.mjs";
 import { stopRegexWorker } from "./server/regex-match.mjs";
@@ -378,6 +378,9 @@ export default definePlugin({
 					if (typeof payload.termVisible === "boolean") host.storage.set("termVisible", payload.termVisible);
 					const newWidths = normWidths(payload.widths);
 					if (newWidths) host.storage.set("widths", newWidths);
+					// The terminal strip's top edge is draggable, so its height is view state too. `null`
+					// (double-click reset) is stored as "no override" rather than as a number.
+					if ("termHeight" in payload) host.storage.set("termHeight", normTermHeight(payload.termHeight));
 					if (SORT_MODES.includes(payload.sort)) host.storage.set("sort", payload.sort);
 					if (GROUP_MODES.includes(payload.group)) host.storage.set("group", payload.group);
 					if (Array.isArray(payload.collapsed)) host.storage.set("collapsed", normStrings(payload.collapsed));

@@ -173,6 +173,13 @@ export const CSS = `
 .mg-term-host{flex:1 1 auto;min-height:0;background:var(--code-bg);padding:4px 6px;overflow:hidden}
 .mg-term-host .xterm{height:100%}
 .mg-term-hint{padding:4px 8px;color:var(--text-faint);font-size:11px}
+/* The terminal strip's top edge: the same dimpled grip as the vertical dividers, rotated. */
+.mg-term-grip{flex:0 0 8px;cursor:row-resize;position:relative;user-select:none;touch-action:none}
+.mg-term-grip::after{content:"";position:absolute;left:0;right:0;top:3px;height:2px;background:var(--border-soft);border-radius:1px;transition:background .1s}
+.mg-term-grip::before{content:"";position:absolute;left:50%;top:1px;margin-left:-9px;width:18px;height:4px;border-radius:2px;background:radial-gradient(circle,var(--text-faint) 1px,transparent 1px) center/6px 4px repeat-x;opacity:.7}
+.mg-term-grip:hover::after,.mg-term-grip.dragging::after{background:var(--accent);top:2px;height:3px}
+.mg-term-grip:hover::before,.mg-term-grip.dragging::before{opacity:1}
+.mg-term-grip:focus-visible{outline:1px solid var(--accent);outline-offset:-1px}
 /* ---- right pane: commit header, file index, per-file cards ---- */
 .mg-dh{background:var(--bg-elev);border-bottom:1px solid var(--border);padding:7px 9px;display:flex;flex-direction:column;gap:5px}
 .mg-dh-subject{font-size:12.5px;font-weight:600;color:var(--text);white-space:pre-wrap;word-break:break-word}
@@ -246,6 +253,23 @@ export const CSS = `
 }
 `;
 
+/** Terminal-strip sizing. TERM_DEFAULT/TERM_MIN mirror .mg-term's height and min-height in the CSS. */
+const TERM_DEFAULT = 190;
+const TERM_MIN = 120;
+const TERM_MAX = 1200; // mirrors TERM_MAX in server/prefs.mjs (the storage-side bound)
+const RESIZE_STEP = 20; // one arrow-key press, for the dividers and the terminal grip alike
+
+/**
+ * Terminal-strip height for a pointer position. The strip hangs off the bottom of the middle pane and
+ * grows upward, so the height is just the distance from the pane's bottom edge up to the pointer.
+ * Pure and exported on purpose: the test suite pins this arithmetic without a real pointer.
+ */
+export function termHeightFrom(pointerY, paneBottom, lo, hi) {
+	const wanted = Math.round(Number(paneBottom) - Number(pointerY));
+	if (!Number.isFinite(wanted)) return lo;
+	return Math.min(hi, Math.max(lo, wanted));
+}
+
 export function createLayout(deps) {
 	const {
 	body, // from mount
@@ -268,10 +292,26 @@ export function createLayout(deps) {
 /* ---------------- layout: splitters ---------------- */
 const MIN_PANE = 140;
 const SPLIT_W = 9;
+/**
+ * How tall the strip may be: never under its own floor, never so tall that the list above it
+ * disappears (one pane's worth of room is always kept). Falls back to the floor when the pane has
+ * no measurable height yet — a freshly mounted view before layout, or a test double.
+ */
+function termBounds() {
+	const lo = TERM_MIN;
+	const paneH = Number(detailPane?.getBoundingClientRect?.().height ?? 0);
+	// An unmeasured pane (first render, or a test double) leaves only the storage bound in place.
+	const hi = Number.isFinite(paneH) && paneH > 0 ? Math.max(lo, Math.round(paneH - MIN_PANE)) : TERM_MAX;
+	return [lo, hi];
+}
 // the middle pane must never shrink below its header (tabs + Term button)
 const MIDDLE_MIN = Math.min(560, Math.max(300, Math.ceil((detailHead?.scrollWidth || 460) + 12)));
 
 function applyLayout() {
+	// The strip's height is only overridden once the user drags or arrows it; otherwise the
+	// stylesheet's default applies, so a double-click reset really returns to the designed size.
+	const termH = Number(state.prefs.termHeight);
+	termEl.style.height = Number.isFinite(termH) && termH > 0 ? `${Math.round(termH)}px` : "";
 	const widths = state.prefs.widths ?? [220, 300];
 	reposPane.style.width = `${widths[0]}px`;
 	diffPane.style.width = `${widths[1]}px`;
@@ -348,7 +388,97 @@ function setupSplitter(split, index) {
 		window.addEventListener("pointerup", onUp);
 		window.addEventListener("pointercancel", onUp);
 	});
+	// Focusable, so resizing does not require a pointer.
+	split.tabIndex = 0;
+	split.addEventListener("keydown", (ev) => {
+		const delta = ev.key === "ArrowLeft" ? -RESIZE_STEP : ev.key === "ArrowRight" ? RESIZE_STEP : 0;
+		if (!delta) return;
+		ev.preventDefault?.();
+		const widths = [...(state.prefs.widths ?? [220, 300])];
+		const [lo, hi] = splitBounds(index, widths);
+		widths[index] = Math.min(hi, Math.max(lo, widths[index] + delta));
+		state.prefs.widths = widths;
+		applyLayout();
+		void savePrefs({ widths: state.prefs.widths });
+		fitTerm();
+	});
 }
 
-	return { applyLayout, splitBounds, setupSplitter };
+/**
+ * The terminal strip's top edge. Dragging upward makes the strip taller (its height is the distance
+ * from the pane's bottom edge up to the pointer), double-click restores the stylesheet's default, and
+ * the arrow keys nudge it — the same affordances as the vertical dividers, on the other axis.
+ */
+function setupTermGrip(grip) {
+	let dragging = false;
+	/** Apply a height (clamped to the pane), keeping the pref and the terminal geometry in step. */
+	const applyHeight = (next, persist) => {
+		const [lo, hi] = termBounds();
+		state.prefs.termHeight = Math.min(hi, Math.max(lo, Math.round(Number(next))));
+		applyLayout();
+		fitTerm();
+		if (persist) void savePrefs({ termHeight: state.prefs.termHeight });
+	};
+	/** The height in effect right now: the stored one, or the stylesheet's default after a reset. */
+	const currentHeight = () => {
+		const h = Number(state.prefs.termHeight);
+		return Number.isFinite(h) && h > 0 ? h : TERM_DEFAULT;
+	};
+	const onMove = (ev) => {
+		if (!dragging) return;
+		ev.preventDefault?.();
+		const rect = detailPane?.getBoundingClientRect?.() ?? {};
+		const [lo, hi] = termBounds();
+		// Dragging up increases the height; below the floor it clamps to the floor.
+		applyHeight(termHeightFrom(ev.clientY, rect.bottom ?? 0, lo, hi), false);
+	};
+	const onUp = () => {
+		if (!dragging) return;
+		dragging = false;
+		grip.classList.remove("dragging");
+		detach();
+		void savePrefs({ termHeight: state.prefs.termHeight });
+		fitTerm();
+	};
+	/** Detach the window listeners: a drag can end outside the window (or with the view gone). */
+	function detach() {
+		try {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+			window.removeEventListener("pointercancel", onUp);
+		} catch {
+			/* no window (tests) */
+		}
+	}
+	splitterCleanup.push(detach);
+	grip.tabIndex = 0;
+	grip.title = "Drag to resize · double-click to reset · arrow keys move it";
+	grip.addEventListener("dblclick", () => {
+		state.prefs.termHeight = null; // null = no override: back to the stylesheet default
+		applyLayout();
+		fitTerm();
+		void savePrefs({ termHeight: null });
+	});
+	grip.addEventListener("keydown", (ev) => {
+		const delta = ev.key === "ArrowUp" ? RESIZE_STEP : ev.key === "ArrowDown" ? -RESIZE_STEP : 0;
+		if (!delta) return;
+		ev.preventDefault?.();
+		applyHeight(currentHeight() + delta, true);
+	});
+	grip.addEventListener("pointerdown", (ev) => {
+		ev.preventDefault?.();
+		dragging = true;
+		grip.classList.add("dragging");
+		try {
+			grip.setPointerCapture?.(ev.pointerId); // keeps the drag alive outside the window
+		} catch {
+			/* no pointer capture support */
+		}
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
+		window.addEventListener("pointercancel", onUp);
+	});
+}
+
+	return { applyLayout, setupSplitter, setupTermGrip, splitBounds };
 }

@@ -142,7 +142,7 @@ export default defineView({
 		const state = {
 			repos: [],
 			cwd: "",
-			prefs: { hideClean: false, autoRefreshSec: 15, termVisible: false, widths: null },
+			prefs: { hideClean: false, autoRefreshSec: 15, termVisible: false, termHeight: null, widths: null },
 			scannedAt: 0,
 			truncated: false,
 			error: null,
@@ -306,7 +306,7 @@ export default defineView({
 			setTab,
 			state,
 		});
-		const { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termHead, termHint, termHost, termTitle, termToggle } = panes;
+		const { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termGrip, termHead, termHint, termHost, termTitle, termToggle } = panes;
 		container.append(style, root);
 
 		// search: search.mjs. Destructuring its result keeps the names below in
@@ -669,7 +669,7 @@ export default defineView({
 			termTitle,
 			termToggle,
 		});
-		const { applyLayout, splitBounds, setupSplitter } = layout;
+		const { applyLayout, setupSplitter, setupTermGrip, splitBounds } = layout;
 			fwd.addDiffAction = detail.addDiffAction;
 			fwd.addPatchActions = detail.addPatchActions;
 			fwd.applyLayout = layout.applyLayout;
@@ -782,6 +782,7 @@ export default defineView({
 		};
 		setupSplitter(split1, 0);
 		setupSplitter(split2, 1);
+		setupTermGrip(termGrip);
 		window.addEventListener("resize", fitTerm);
 		if (typeof ResizeObserver !== "undefined") {
 			try {

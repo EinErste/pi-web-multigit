@@ -147,6 +147,19 @@ globalThis.window = {
 /* ---------------- helpers ---------------- */
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+/** Every element reports the same 1200x800 rect: enough for the pane arithmetic (dividers, term grip). */
+El.prototype.getBoundingClientRect = () => ({ width: 1200, height: 800, left: 0, top: 0, right: 1200, bottom: 800 });
+
+/** Fire the listeners an element registered with addEventListener (the stub has no dispatchEvent). */
+const fire = (el, type, ev = {}) => {
+	for (const fn of el._listeners[type] ?? []) fn({ preventDefault() {}, stopPropagation() {}, ...ev });
+};
+
+/** …and the same for the window listeners a drag registers (pointermove / pointerup). */
+const fireWindow = (type, ev = {}) => {
+	for (const fn of globalThis.window._listeners[type] ?? []) fn({ preventDefault() {}, stopPropagation() {}, ...ev });
+};
+
 const clickTab = (label) => {
 	const btn = find(container, "mg-tab").find((t) => t.textContent.startsWith(label));
 	assert.ok(btn, `tab "${label}" exists`);
@@ -657,6 +670,51 @@ onData({ ...scan, reqId: termOffPref.reqId, prefs: { ...scan.prefs, termVisible:
 await tick();
 assert.equal(termEl.style.display, "none", "terminal hides after toggling off");
 console.log("   splitters + full-terminal open/input/stream/exit/close ok");
+
+console.log("13a. the terminal strip resizes from its top edge");
+{
+	const grip = findOne(container, "mg-term-grip");
+	assert.ok(grip, "the strip has a top-edge grip");
+	assert.ok(grip.title.includes("double-click"), "its title explains the reset gesture");
+
+	// Drag upward. The strip hangs off the pane's bottom edge (the stub reports bottom=800), so a
+	// pointer at y=500 asks for 300px.
+	fire(grip, "pointerdown", { pointerId: 1, clientY: 700 });
+	fireWindow("pointermove", { pointerId: 1, clientY: 500 });
+	assert.equal(termEl.style.height, "300px", "dragging up grows the strip");
+	fireWindow("pointerup", { pointerId: 1 });
+	assert.equal(sent.at(-1).action, "multi-git:prefs");
+	assert.equal(sent.at(-1).termHeight, 300, "the height is persisted on release");
+
+	// Bounds: never taller than the pane minus one pane's worth, never shorter than its own floor.
+	fire(grip, "pointerdown", { pointerId: 2, clientY: 700 });
+	fireWindow("pointermove", { pointerId: 2, clientY: 0 });
+	assert.equal(termEl.style.height, "660px", "it cannot swallow the list above it");
+	fireWindow("pointermove", { pointerId: 2, clientY: 799 });
+	assert.equal(termEl.style.height, "120px", "…nor shrink below its floor");
+	fireWindow("pointerup", { pointerId: 2 });
+
+	// Arrow keys do the same without a pointer.
+	fire(grip, "keydown", { key: "ArrowUp" });
+	assert.equal(termEl.style.height, "140px", "ArrowUp grows it by one step");
+	assert.equal(sent.at(-1).termHeight, 140, "…and persists it");
+	fire(grip, "keydown", { key: "ArrowDown" });
+	assert.equal(termEl.style.height, "120px", "ArrowDown shrinks it back");
+
+	// Double-click returns to the designed height instead of a remembered number.
+	fire(grip, "dblclick", {});
+	assert.equal(termEl.style.height, "", "a reset clears the inline height");
+	assert.equal(sent.at(-1).termHeight, null, "…and stores \"no override\"");
+
+	// And a stored height comes back through prefs (the round trip the server suite pins).
+	const heightReq = sent.filter((m) => m.action === "multi-git:prefs").at(-1);
+	// termVisible stays false: this section only exercises the height, and the next section toggles
+	// the strip on from the hidden state this one inherited.
+	onData({ ...scan, reqId: heightReq.reqId, prefs: { ...scan.prefs, termVisible: false, widths: [320, 400], termHeight: 420 } });
+	await tick();
+	assert.equal(termEl.style.height, "420px", "the stored height is applied on the next reply");
+	console.log("   grip: drag 300px, clamp 120/660, arrows ±20, dblclick reset, 420px restored");
+}
 
 console.log("13b. a terminal that cannot start says so, and a later trigger retries");
 termBtn.onclick(); // show the strip again → a fresh open attempt

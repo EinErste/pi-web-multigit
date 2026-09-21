@@ -275,11 +275,19 @@ const tExit = await waitFor((m) => m && m.kind === "term-exit" && m.repo === tar
 assert.ok(tExit, "closing the terminal reports term-exit");
 console.log(`term-close: ok (exit=${tExit.exitCode})`);
 
-const layout = await ask({ action: "multi-git:prefs", reqId: 27, termVisible: true, widths: [320, 400] });
+const layout = await ask({ action: "multi-git:prefs", reqId: 27, termVisible: true, widths: [320, 400], termHeight: 320 });
 assert.equal(layout.ok, true);
 assert.equal(layout.prefs.termVisible, true);
 assert.deepEqual(layout.prefs.widths, [320, 400]);
-console.log(`prefs:      termVisible=${layout.prefs.termVisible} widths=${JSON.stringify(layout.prefs.widths)}`);
+assert.equal(layout.prefs.termHeight, 320, "the terminal-strip height round-trips");
+// Out-of-range and malformed values are clamped / ignored rather than trusted.
+const clamped = await ask({ action: "multi-git:prefs", reqId: 28, termHeight: 5 });
+assert.equal(clamped.prefs.termHeight, 120, "below the floor is clamped up");
+const reset = await ask({ action: "multi-git:prefs", reqId: 29, termHeight: null });
+assert.equal(reset.prefs.termHeight, null, "null means 'no override' (the stylesheet default)");
+const junk = await ask({ action: "multi-git:prefs", reqId: 30, termHeight: "tall" });
+assert.equal(junk.prefs.termHeight, null, "junk is ignored");
+console.log(`prefs:      termVisible=${layout.prefs.termVisible} widths=${JSON.stringify(layout.prefs.widths)} termHeight=${layout.prefs.termHeight}`);
 
 console.log("\n=== failure paths ===");
 const unknownRepo = await ask({ action: "multi-git:stats", reqId: 7, repo: `${CWD}/nope` });
