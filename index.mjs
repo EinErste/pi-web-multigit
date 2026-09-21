@@ -37,9 +37,10 @@ import { stat, unlink } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_AUTO_REFRESH_SEC, GIT_CONCURRENCY, discover, firstLine, insideRepoReal, mapLimit, pathKey } from "./server/git.mjs";
+import { DEFAULT_AUTO_REFRESH_SEC, GIT_CONCURRENCY, discover, insideRepoReal, mapLimit, pathKey } from "./server/git.mjs";
 import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
-import { TERM_FLUSH_MS, TERM_MAX_COLS, TERM_MAX_INPUT, TERM_MAX_OUTPUT, TERM_MAX_ROWS, clampDim, ensureLocalNodePty, loadNodePty, resolveShell } from "./server/pty.mjs";
+import { ensureLocalNodePty, loadNodePty } from "./server/pty.mjs";
+import { createTerminalPool } from "./server/terminal-pool.mjs";
 import { repoSummary, resolveOptions } from "./server/repos.mjs";
 import { stopRegexWorker } from "./server/regex-match.mjs";
 
@@ -51,7 +52,9 @@ import { definePlugin } from "./sdk/index.mjs";
 
 
 /** The plugin's own version, read from manifest.json: a hard-coded copy went stale (the ready log said
- * 0.8.1 while the manifest said 0.10.0), and the client uses it to notice a stale running server. */
+ * 0.8.1 while the manifest said 0.10.0). It travels with every scan reply as `serverVersion`; no client gates
+ * on it — a server too old for term-attach/term-sync answers with an unknown-request error and the strip
+ * falls back to a plain term-open — so it is there for whoever needs to notice a stale running server. */
 function loadPluginVersion() {
 	try {
 		const here = dirname(fileURLToPath(import.meta.url));
@@ -205,145 +208,12 @@ export default definePlugin({
 				host.log("info", "node-pty (plugin-local) ready — the terminal strip is available");
 			});
 		}
-		const term = { pty: null, repo: null, clientId: null, seq: 0, outBuf: "", flushTimer: null };
-
-		function termPush(kind, extra) {
-			try {
-				const payload = { action: "multi-git:data", kind, ...extra };
-				if (term.clientId) host.sendTo(term.clientId, payload);
-				else host.broadcast(payload);
-			} catch (err) {
-				host.log("warn", "terminal push failed", err?.message ?? String(err));
-			}
-		}
-
-		function termFlush() {
-			if (term.flushTimer) {
-				clearTimeout(term.flushTimer);
-				term.flushTimer = null;
-			}
-			const chunk = term.outBuf;
-			term.outBuf = "";
-			if (chunk && term.repo) termPush("term-data", { repo: term.repo, data: chunk.slice(-TERM_MAX_OUTPUT) });
-		}
-
-		function killTerminal(reason) {
-			term.seq++;
-			if (term.flushTimer) {
-				clearTimeout(term.flushTimer);
-				term.flushTimer = null;
-			}
-			term.outBuf = "";
-			const pty = term.pty;
-			const repo = term.repo;
-			term.pty = null;
-			// NB: clientId is intentionally kept — the closing client still needs the
-			// term-exit push; it is overwritten on the next open.
-			if (pty) {
-				try {
-					pty.kill();
-				} catch (err) {
-					// Windows node-pty sometimes reports AttachConsole failure here; the host's
-					// terminal manager hits the same and treats it as benign.
-					host.log("debug", "pty kill reported", err?.message ?? String(err));
-				}
-				// Hard stop the shell so no ConPTY agent lingers after a failed kill().
-				if (typeof pty.pid === "number") {
-					try {
-						process.kill(pty.pid);
-					} catch {
-						/* already gone */
-					}
-				}
-				host.log("info", "terminal closed", { repo, reason });
-				return true;
-			}
-			return false;
-		}
-
-		const termOpen = (from, payload) => {
-			const repo = resolveRepo(payload.repo);
-			const cols = clampDim(payload.cols, 80, TERM_MAX_COLS);
-			const rows = clampDim(payload.rows, 24, TERM_MAX_ROWS);
-			if (!ptyMod) throw new Error("node-pty is unavailable — cannot start a shell");
-			let pty;
-			try {
-				const { shell, args } = resolveShell();
-				pty = ptyMod.spawn(shell, args, {
-					name: "xterm-256color",
-					cols,
-					rows,
-					cwd: repo,
-					// TERM + LANG parity with the host's own terminal (dist/server/terminals.js → shellEnv).
-					env: (() => {
-						const env = { ...process.env, TERM: "xterm-256color" };
-						if (!env.LANG && !env.LC_ALL) env.LANG = "en_US.UTF-8";
-						return env;
-					})(),
-				});
-			} catch (err) {
-				throw new Error(`Failed to start a shell here: ${firstLine(err)}`);
-			}
-			// Only now retire the previous shell: a failed spawn must not kill a working one.
-			killTerminal("replaced");
-			const my = ++term.seq;
-			term.pty = pty;
-			term.repo = repo;
-			term.clientId = from;
-			pty.onData((data) => {
-				if (term.seq !== my || term.pty !== pty) return;
-				term.outBuf += data;
-				if (!term.flushTimer) term.flushTimer = setTimeout(termFlush, TERM_FLUSH_MS);
-			});
-			pty.onExit(({ exitCode }) => {
-				if (term.seq !== my || term.pty !== pty) return;
-				termPush("term-exit", { repo, exitCode: typeof exitCode === "number" ? exitCode : null });
-				killTerminal("exited");
-			});
-			return { repo, cols, rows, shell: basename(resolveShell().shell) };
-		};
-
 		/**
-		 * The PTY belongs to the client that opened it. `term.clientId` was recorded from the start but never
-		 * checked, so a second client (another tab, or anyone else the server admits) could type into the
-		 * shell someone else opened — silently, since input replies are fire-and-forget on the client side.
-		 * Re-opening still takes the terminal over: that kills the previous shell visibly, which is a
-		 * deliberate act, unlike injected keystrokes. An anonymous socket has no id on either side, so its
-		 * own terminal still matches.
+		 * The terminal pool itself lives in server/terminal-pool.mjs — it is per-activation state, and the
+		 * entry only wires it up. `getPty` is read lazily: a plugin-local node-pty install can still land
+		 * after activation, and the strip has to start working when it does.
 		 */
-		function assertTermOwner(from, what) {
-			if (term.pty && term.clientId !== from) throw new Error(`The terminal in this repository belongs to another client — ${what} refused`);
-		}
-
-		const termInput = (from, payload) => {
-			const pty = term.pty;
-			if (!pty) throw new Error("No terminal is running");
-			if (pathKey(String(payload.repo ?? "")) !== pathKey(term.repo)) throw new Error("Terminal is running in a different repository");
-			assertTermOwner(from, "input");
-			const data = typeof payload.data === "string" ? payload.data : "";
-			if (!data) return;
-			if (data.length > TERM_MAX_INPUT) throw new Error("Terminal input exceeds 64KB");
-			pty.write(data);
-		};
-
-		const termResize = (from, payload) => {
-			const pty = term.pty;
-			if (!pty) throw new Error("No terminal is running");
-			if (pathKey(String(payload.repo ?? "")) !== pathKey(term.repo)) throw new Error("Terminal is running in a different repository");
-			assertTermOwner(from, "resize");
-			const cols = clampDim(payload.cols, 80, TERM_MAX_COLS);
-			const rows = clampDim(payload.rows, 24, TERM_MAX_ROWS);
-			try {
-				pty.resize(cols, rows);
-			} catch (err) {
-				host.log("warn", "pty resize failed", err?.message ?? String(err));
-			}
-		};
-
-		const termClose = (from) => {
-			assertTermOwner(from, "close");
-			return killTerminal("user");
-		};
+		const terminal = createTerminalPool({ getPty: () => ptyMod, host, resolveRepo });
 
 		// The action handlers, grouped by concern. They receive the per-message values as arguments and the
 		// activation state through ctx, so the dispatch below is a lookup rather than a chain of comparisons.
@@ -352,7 +222,7 @@ export default definePlugin({
 				createViewActions({ SYNC_LOG_LIMIT, TIMELINE_DEFAULT_DAYS, TIMELINE_MAX_ENTRIES, TIMELINE_PER_REPO, basename, insideRepo: insideRepoReal, known, reply, resolveRepo }),
 			),
 			...Object.entries(createSearchActions({ SEARCH_MAX_PER_FILE, SEARCH_MAX_PER_REPO, SEARCH_MAX_TOTAL, SEARCH_PICKAXE_LIMIT, SEARCH_QUERY_MAX, basename, known, reply })),
-			...Object.entries(createTerminalActions({ reply, termClose, termInput, termOpen, termPush, termResize })),
+			...Object.entries(createTerminalActions({ reply, ...terminal })),
 			...Object.entries(createWriteActions({ basename, fetching, join, known, lastScan, pulling, reply, resolveRepo, stat, unlink })),
 		]);
 
@@ -471,10 +341,14 @@ export default definePlugin({
 					"multi-git:branches-all": "branches-all",
 					"multi-git:blame": "blame",
 					"multi-git:compare": "compare",
-					"multi-git:term-open": "term-open",
-					"multi-git:term-input": "term-input",
-					"multi-git:term-resize": "term-resize",
+					"multi-git:term-attach": "term-attach",
+					"multi-git:term-clear": "term-clear",
 					"multi-git:term-close": "term-close",
+					"multi-git:term-detach": "term-detach",
+					"multi-git:term-input": "term-input",
+					"multi-git:term-open": "term-open",
+					"multi-git:term-resize": "term-resize",
+					"multi-git:term-sync": "term-sync",
 				};
 				reply(from, {
 					action: "multi-git:data",
@@ -492,7 +366,7 @@ export default definePlugin({
 			// Switching projects switches the scan root: drop caches and let open views rescan.
 			known.value = new Map();
 			generation++; // a scan still in flight belongs to the previous project
-			killTerminal("cwd-changed");
+			terminal.killEveryTerminal("cwd-changed"); // every shell's cwd belongs to the old workspace
 			lastScan.value = null;
 			host.broadcast({ action: "multi-git:cwd", cwd: host.cwd });
 		});
@@ -502,7 +376,7 @@ export default definePlugin({
 		return () => {
 			offMessage();
 			offCwd();
-			killTerminal("deactivate");
+			terminal.killEveryTerminal("deactivate");
 			void stopRegexWorker();
 		};
 	},

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { relative } from "node:path";
 import { BRANCHES_MAX_PER_REPO, BRANCH_UNPUSHED_COMMITS, BRANCH_UNPUSHED_MAX, BUILTIN_SKIP, DEFAULT_AUTO_REFRESH_SEC, DEFAULT_DEPTH, DEFAULT_MAX_REPOS, FETCH_TIMEOUT_MS, GIT_MAX_OUTPUT, execFileAsync, firstLine, git } from "./git.mjs";
 import { countFiles, parseBranchVV, parseMergedBranches, parseShortCommits, parseStatusFiles, parseStatusHeader, parseWorktreePaths } from "./parsers.mjs";
-import { GROUP_MODES, SORT_MODES, asBool, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, oneOf, splitList } from "./prefs.mjs";
+import { GROUP_MODES, SORT_MODES, TERM_KEEP_DEFAULT, TERM_KEEP_MAX, asBool, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, oneOf, splitList } from "./prefs.mjs";
 
 
 export function resolveOptions(host) {
@@ -40,6 +40,8 @@ export function resolveOptions(host) {
 		hideClean: asBool(stored("hideClean", null), asBool(settings.hideClean, false)),
 		termVisible: asBool(stored("termVisible", null), false),
 		termHeight: normTermHeight(stored("termHeight", null)),
+		// A setting, not stored view state: how many repository shells stay alive at once (the pool).
+		termKeep: numOr(settings.termKeep, TERM_KEEP_DEFAULT, 1, TERM_KEEP_MAX),
 		widths: normWidths(stored("widths", null)),
 		sort: oneOf(stored("sort", null), SORT_MODES, "name"),
 		group: oneOf(stored("group", null), GROUP_MODES, "none"),

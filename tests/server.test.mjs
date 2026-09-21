@@ -27,7 +27,7 @@ process.on("unhandledRejection", (err) => {
 
 const plugin = (await import(PLUGIN_ENTRY)).default;
 const host = createMockHost({ cwd: CWD, settings: { depth: 2, maxRepos: 40 } });
-await plugin.activate(host);
+const disposeMain = await plugin.activate(host);
 
 const ask = async (payload) => {
 	await host.mock.emitAsync("onMessage", payload, "client-1");
@@ -246,6 +246,13 @@ assert.equal(tOpen.repo, target.path);
 assert.ok(tOpen.shell, "term-open reports the shell basename");
 console.log(`term-open: ok shell=${tOpen.shell} cols=${tOpen.cols} rows=${tOpen.rows}`);
 
+// The cursor handshake: nothing streams until the client says which window it rendered, so a replay
+// and live output can neither arrive out of order nor be dropped.
+const tSync = await ask({ action: "multi-git:term-sync", reqId: 21, repo: target.path, cursor: tOpen.cursor ?? 0 });
+assert.equal(tSync.ok, true, tSync.error ?? "");
+assert.equal(tSync.resync, false, "a client that rendered the window streams from its end");
+assert.ok(tOpen.alive === true, "term-open reports a live shell");
+
 // wrapping banner/prompt comes as pushed term-data
 const firstChunk = await waitFor((m) => m && m.kind === "term-data" && m.repo === target.path);
 assert.ok(firstChunk, "PTY output is streamed as term-data");
@@ -258,6 +265,19 @@ assert.equal(tIn.ok, true, tIn.error ?? "");
 const echoed = await waitFor((m) => m && m.kind === "term-data" && typeof m.data === "string" && m.data.includes(marker));
 assert.ok(echoed, "typed input reaches the shell and its output streams back");
 console.log("term-input: marker echoed by the shell");
+
+// The chunk names the absolute cursor it ends at: a pane that keeps it asks for the delta next time, so
+// output it already rendered is not handed out again (nothing advanced that cursor before this).
+await sleep(400); // let the shell finish echoing the marker before taking the last chunk that has it
+const withMarker = allSends().filter((m) => m && m.kind === "term-data" && String(m.data ?? "").includes(marker));
+const lastMarkerChunk = withMarker.at(-1);
+assert.ok(lastMarkerChunk, "the marker reached the stream as term-data");
+assert.ok(Number.isFinite(Number(lastMarkerChunk.cursor)), "term-data carries the cursor of its last byte");
+const tNoDup = await ask({ action: "multi-git:term-sync", reqId: 29, repo: target.path, cursor: Number(lastMarkerChunk.cursor) });
+assert.equal(tNoDup.ok, true, tNoDup.error ?? "");
+assert.equal(tNoDup.resync, false, "a pane that rendered the last marker-bearing chunk is up to date");
+assert.equal(String(tNoDup.data ?? "").includes(marker), false, "…so that output is not handed out again");
+console.log(`term-data: cursor ${lastMarkerChunk.cursor} travels with the chunk, re-sync repeats nothing`);
 
 const tRz = await ask({ action: "multi-git:term-resize", reqId: 23, repo: target.path, cols: 100, rows: 30 });
 assert.equal(tRz.ok, true, tRz.error ?? "");
@@ -274,6 +294,167 @@ assert.equal(tCl.ok, true, tCl.error ?? "");
 const tExit = await waitFor((m) => m && m.kind === "term-exit" && m.repo === target.path, 6_000);
 assert.ok(tExit, "closing the terminal reports term-exit");
 console.log(`term-close: ok (exit=${tExit.exitCode})`);
+
+// ——— retained output: the window outlives the shell, and a dead shell stays replayable ———
+const tDead = await ask({ action: "multi-git:term-attach", reqId: 31, repo: target.path });
+assert.equal(tDead.ok, true, tDead.error ?? "");
+assert.equal(tDead.alive, false, "the shell was closed, so nothing is live");
+assert.equal(tDead.exited, true, "…but its output is retained as history");
+assert.ok(String(tDead.data).includes(marker), "the retained window still holds what the shell printed");
+console.log(`term-attach: replaying ${String(tDead.data).length} chars of history (cursor=${tDead.cursor})`);
+
+// a fresh shell in the same repository inherits that window instead of starting blank
+const tReopen = await ask({ action: "multi-git:term-open", reqId: 32, repo: target.path, cols: 80, rows: 24 });
+assert.equal(tReopen.ok, true, tReopen.error ?? "");
+assert.ok(String(tReopen.data).includes(marker), "the rebuilt shell inherits its predecessor's output");
+const tResync = await ask({ action: "multi-git:term-sync", reqId: 33, repo: target.path, cursor: tReopen.cursor ?? 0 });
+assert.equal(tResync.ok, true, tResync.error ?? "");
+
+// detaching keeps the shell: unmounting a view must not kill it, and the next client adopts it
+const tDetach = await ask({ action: "multi-git:term-detach", reqId: 34, repo: target.path });
+assert.equal(tDetach.detached, true, "detach releases the seat");
+assert.equal(tDetach.alive, true, "…without killing the shell");
+const tAdopt = await ask({ action: "multi-git:term-attach", reqId: 35, repo: target.path });
+assert.equal(tAdopt.alive, true, "the detached shell is still there to adopt");
+assert.ok(String(tAdopt.data).includes(marker), "and its window is replayable again");
+const tResync2 = await ask({ action: "multi-git:term-sync", reqId: 36, repo: target.path, cursor: tAdopt.cursor ?? 0 });
+assert.equal(tResync2.ok, true, "streaming resumes after the hand-off");
+
+// A detach names its repository, like a close does: one that arrives after the pane has moved on must not
+// release the seat of whichever shell is attached by then. A superseded openTerminal sends exactly that
+// (its own generation was bumped while the attach was in flight).
+const tDetachOther = await ask({ action: "multi-git:term-detach", reqId: 44, repo: `${CWD}/nope` });
+assert.equal(tDetachOther.detached, false, "a detach naming another repository does not give up the seat");
+assert.equal(tDetachOther.alive, true, "…the shell keeps running");
+const tStillMine = await ask({ action: "multi-git:term-sync", reqId: 45, repo: target.path, cursor: tAdopt.cursor ?? 0 });
+assert.equal(tStillMine.ok, true, "…and the attached shell is still owned and still streaming");
+console.log("term-detach: a detach for another repo leaves the seat alone");
+
+// A detach may carry the seat token its own attach was given, and the token is what separates a current
+// detach from a superseded one for the SAME repository (A → B → A inside one attach round trip): with only
+// the repository name to go on, that stale detach freed the seat the newest attach had just taken.
+assert.ok(Number.isFinite(Number(tAdopt.seat)), "term-attach hands the seat token to the client that took it");
+const tHandoff = await ask({ action: "multi-git:term-detach", reqId: 101, repo: target.path });
+assert.equal(tHandoff.detached, true, "the named owner releases the seat");
+const tReattach = await ask({ action: "multi-git:term-attach", reqId: 102, repo: target.path });
+assert.equal(tReattach.alive, true, "…and adopting it again takes a fresh seat");
+assert.ok(Number(tReattach.seat) > Number(tAdopt.seat), "the new seat is newer than the old one");
+const tStaleSeat = await ask({ action: "multi-git:term-detach", reqId: 103, repo: target.path, seat: Number(tAdopt.seat) });
+assert.equal(tStaleSeat.detached, false, "a superseded detach cannot release the seat a newer attach holds");
+const tStillHeld = await ask({ action: "multi-git:term-sync", reqId: 104, repo: target.path, cursor: tReattach.cursor ?? 0 });
+assert.equal(tStillHeld.ok, true, "…the shell is still attached and still streaming");
+// A detach that names no repository and carries no token gives up nothing: `pathKey("")` is the server's own
+// cwd, so resolving it would have released whichever shell happened to live there.
+const tNoName = await ask({ action: "multi-git:term-detach", reqId: 105, repo: "" });
+assert.equal(tNoName.detached, false, "a detach naming nothing releases nothing");
+const tNoField = await ask({ action: "multi-git:term-detach", reqId: 106 });
+assert.equal(tNoField.detached, false, "…also when the field is absent entirely");
+// …while the seat the holder actually carries does release it, and the shell is left for the tests below.
+const tSeatRelease = await ask({ action: "multi-git:term-detach", reqId: 107, repo: target.path, seat: Number(tReattach.seat) });
+assert.equal(tSeatRelease.detached, true, "the current seat releases the seat");
+const tReattachAgain = await ask({ action: "multi-git:term-attach", reqId: 108, repo: target.path });
+assert.equal(tReattachAgain.alive, true, "the shell is still there to adopt");
+console.log("term-detach: the seat token tells a current detach from a superseded one");
+
+// ownership: a shell someone else is driving cannot be adopted without a hand-off
+const replyTo = (id) => host.calls.filter((c) => c.method === "sendTo").map((c) => c.args[1]).findLast((m) => m && m.reqId === id);
+await host.mock.emitAsync("onMessage", { action: "multi-git:term-attach", reqId: 37, repo: target.path }, "client-2");
+assert.equal(replyTo(37)?.ok, false, "another client cannot attach to a live shell");
+await ask({ action: "multi-git:term-detach", reqId: 38, repo: target.path });
+await host.mock.emitAsync("onMessage", { action: "multi-git:term-attach", reqId: 39, repo: target.path }, "client-2");
+assert.equal(replyTo(39)?.alive, true, "after a hand-off the next client can adopt it");
+await host.mock.emitAsync("onMessage", { action: "multi-git:term-detach", reqId: 40, repo: target.path }, "client-2");
+
+// A takeover is not silent: the shell client-2 replaces is one client-1 is driving, and a pane that keeps
+// claiming to be alive would swallow every keystroke it sends (term-input is fire-and-forget on the client).
+// The host's own rule is the same — terminal_exit is what tells a client the terminal it watches is gone —
+// while its in-place restart of a terminal the same client owns emits nothing, because there the pane
+// continues. Both halves are pinned here.
+const exitsTo1 = () => host.calls.filter((c) => c.method === "sendTo" && c.args?.[0] === "client-1" && c.args?.[1]?.kind === "term-exit").map((c) => c.args[1]);
+{
+	await ask({ action: "multi-git:term-open", reqId: 111, repo: target.path, cols: 80, rows: 24 }); // client-1 drives it
+	const before = exitsTo1().length;
+	await host.mock.emitAsync("onMessage", { action: "multi-git:term-open", reqId: 112, repo: target.path, cols: 80, rows: 24 }, "client-2");
+	const pushed = exitsTo1().slice(before);
+	assert.equal(pushed.length, 1, "the client that was driving the replaced shell is told it exited");
+	assert.equal(pushed[0].repo, target.path);
+	assert.equal(replyTo(112)?.ok, true, "…and the takeover itself succeeds");
+	// The same client replacing its own shell is silent, like the host's restart-in-place: the pane continues,
+	// and its term-open reply clears the exited flag the push would have set.
+	await ask({ action: "multi-git:term-open", reqId: 113, repo: target.path, cols: 80, rows: 24 }); // takes it back
+	const beforeOwn = exitsTo1().length;
+	await ask({ action: "multi-git:term-open", reqId: 114, repo: target.path, cols: 80, rows: 24 }); // its own shell
+	assert.equal(exitsTo1().length, beforeOwn, "a client replacing its own shell is told nothing");
+	console.log("takeover: the replaced shell's owner is told, its own restart stays silent");
+}
+
+// clear forgets the retained window, so a remount cannot resurrect text the user cleared
+const tClear = await ask({ action: "multi-git:term-clear", reqId: 41, repo: target.path });
+assert.equal(tClear.cleared, true);
+const tAfterClear = await ask({ action: "multi-git:term-attach", reqId: 42, repo: target.path });
+assert.equal(String(tAfterClear.data), "", "the retained window is empty after a clear");
+
+// leave the terminal closed for the rest of the suite
+const tCloseEnd = await ask({ action: "multi-git:term-close", reqId: 43, repo: target.path });
+assert.equal(tCloseEnd.ok, true, tCloseEnd.error ?? "");
+await waitFor((m) => m && m.kind === "term-exit" && m.repo === target.path, 6_000);
+
+// ——— the pool: a shell survives a repository switch, and the oldest gives way at the cap ———
+{
+	const second = scan.repos.find((r) => r.path !== target.path);
+	assert.ok(second, "the scan found a second repository to switch to");
+	// Open a shell in the target repo first: the pool keeps it running when the pane moves on (the
+	// retention block above closed its shell, so this is a fresh one).
+	const openA = await ask({ action: "multi-git:term-open", reqId: 50, repo: target.path, cols: 80, rows: 24 });
+	assert.equal(openA.ok, true, openA.error ?? "");
+	const openB = await ask({ action: "multi-git:term-open", reqId: 51, repo: second.path, cols: 80, rows: 24 });
+	assert.equal(openB.ok, true, openB.error ?? "");
+	const backA = await ask({ action: "multi-git:term-attach", reqId: 52, repo: target.path });
+	assert.equal(backA.alive, true, "the first repository's shell kept running while the other was used");
+	const backB = await ask({ action: "multi-git:term-attach", reqId: 53, repo: second.path });
+	assert.equal(backB.alive, true, "…and the second one kept running when the first got the pane back");
+	console.log(`pool: both shells stay alive across a switch (${shortAbs(target.path)} ↔ ${shortAbs(second.path)})`);
+	const closeA = await ask({ action: "multi-git:term-close", reqId: 54, repo: target.path });
+	assert.equal(closeA.exited, true, "closing names its repository, not whichever shell holds the pane");
+	const stillB = await ask({ action: "multi-git:term-attach", reqId: 55, repo: second.path });
+	assert.equal(stillB.alive, true, "the other repository's shell is untouched by that close");
+	await ask({ action: "multi-git:term-close", reqId: 56, repo: second.path });
+}
+
+// ——— the cap: past `termKeep`, the least recently used shell is the one that goes ———
+{
+	const poolHost = createMockHost({ cwd: CWD, settings: { depth: 2, maxRepos: 40, termKeep: 2 } });
+	const disposePool = await plugin.activate(poolHost);
+	const askPool = async (payload) => {
+		await poolHost.mock.emitAsync("onMessage", payload, "client-pool");
+		const sends = poolHost.calls.filter((c) => c.method === "sendTo").map((c) => c.args[1]);
+		return sends.findLast((m) => m && m.reqId === payload.reqId) ?? sends.at(-1);
+	};
+	await askPool({ action: "multi-git:scan", reqId: 60 });
+	const three = scan.repos.slice(0, 3);
+	assert.equal(three.length, 3, "three repositories are needed to exceed a pool of two");
+	for (const [i, r] of three.entries()) {
+		const opened = await askPool({ action: "multi-git:term-open", reqId: 61 + i, repo: r.path, cols: 80, rows: 24 });
+		assert.equal(opened.ok, true, opened.error ?? "");
+	}
+	const alive = [];
+	for (const [i, r] of three.entries()) {
+		const attached = await askPool({ action: "multi-git:term-attach", reqId: 70 + i, repo: r.path });
+		alive.push(attached.alive);
+	}
+	// Exactly one eviction, of the shell that had been parked longest.
+	const evictions = poolHost.calls.filter((c) => c.method === "log" && String(c.args?.[1]).startsWith("terminal evicted"));
+	assert.equal(evictions.length, 1, `one eviction past the cap, got ${evictions.length}`);
+	assert.equal(String(evictions[0]?.args?.[2]?.repo ?? ""), three[0].path, "the oldest shell is the one that goes");
+	assert.equal(alive.filter(Boolean).length, 2, `exactly termKeep shells stay alive (got ${alive.filter(Boolean).length})`);
+	assert.equal(alive[0], false, "the evicted shell is the one that is gone");
+	assert.equal(alive[1], true, "the shell parked before the newest one is still live");
+	assert.equal(alive[2], true, "and the newest one holds the pane");
+	console.log(`pool: termKeep=2 → ${alive.filter(Boolean).length} live shells, the oldest one evicted`);
+	// Its own instance means its own shells: dispose it rather than leaving them to the trailing exit.
+	disposePool?.();
+}
+
 
 const layout = await ask({ action: "multi-git:prefs", reqId: 27, termVisible: true, widths: [320, 400], termHeight: 320 });
 assert.equal(layout.ok, true);
@@ -641,4 +822,18 @@ console.log(`diff(-w -U0): ${(tight.staged + tight.worktree).length}b`);
 		rmSync(root, { recursive: true, force: true });
 	}
 }
+// Deactivate the main instance: this is the plugin's own teardown path, which must kill whatever
+// shell is still live (the pool keeps several).
+disposeMain?.();
+
 console.log("\nSERVER CHECKS PASSED");
+
+/**
+ * Exit explicitly, on purpose. This suite spawns real PTYs, and on Windows node-pty leaves a conout
+ * worker thread plus its socket pair behind after a shell is closed (it disposes them only if the
+ * native ClosePseudoConsole call does not throw; the host's own terminal manager spawns with the same
+ * options and has the same residue). Those handles keep the event loop alive, so without this the
+ * suite would print its verdict and then sit there for minutes instead of exiting. Assertions all
+ * completed above — a failure would already have thrown before this point.
+ */
+process.exit(0);

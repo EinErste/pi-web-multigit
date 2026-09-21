@@ -574,6 +574,7 @@ assert.ok(termBtn, "Term toggle button in the middle-pane head");
 
 // swap in FAKE xterm classes before toggling so openTerminal uses the seam
 let fakeTerm = null;
+let termConstructions = 0; // how many panes this view ever built: a reused pane must not add one
 class FakeTerminal {
 	constructor(opts) {
 		this.opts = opts;
@@ -582,6 +583,7 @@ class FakeTerminal {
 		this.writes = [];
 		this.disposed = false;
 		fakeTerm = this;
+		termConstructions++;
 	}
 	open(el) {
 		this._host = el;
@@ -616,17 +618,31 @@ assert.equal(termPrefReq.action, "multi-git:prefs");
 assert.equal(termPrefReq.termVisible, true);
 assert.ok(fakeTerm, "xterm terminal constructed via the seam");
 assert.equal(fakeTerm.disposed, false, "terminal not disposed while open");
-const termOpenReq = sent.find((m) => m.action === "multi-git:term-open");
-assert.ok(termOpenReq, "term-open sent after toggle");
+// The client attaches first and only spawns when there is nothing to attach to.
+const attachReq = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+assert.ok(attachReq, "the strip attaches before it spawns");
+assert.equal(attachReq.repo, dirtyRepo.path, "…for the selected repository");
+onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: attachReq.reqId, repo: dirtyRepo.path, alive: false, exited: false, data: "", offset: 0, cursor: 0 });
+await tick();
+const termOpenReq = sent.filter((m) => m.action === "multi-git:term-open").at(-1);
+assert.ok(termOpenReq, "nothing live to attach to → a shell is spawned");
+assert.ok(sent.indexOf(attachReq) < sent.indexOf(termOpenReq), "the attach precedes the spawn");
 assert.equal(termOpenReq.repo, dirtyRepo.path, "shell starts in the selected repo");
 assert.equal(termOpenReq.cols, 100, "fit addon resized to 100 cols");
 assert.equal(termOpenReq.rows, 24);
-onData({ action: "multi-git:data", kind: "term-open", ok: true, reqId: termOpenReq.reqId, repo: dirtyRepo.path, shell: "bash", cols: 100, rows: 24 });
+onData({ action: "multi-git:data", kind: "term-open", ok: true, reqId: termOpenReq.reqId, repo: dirtyRepo.path, shell: "bash", cols: 100, rows: 24, data: "PREVIOUS SESSION\r\n", offset: 0, cursor: 18 });
 await tick();
-// a successful open must leave the shell alone (the reply guard once bumped the generation
-// and immediately sent term-close for the shell it had just started)
-const openIdx = sent.indexOf(termOpenReq);
-assert.equal(sent.slice(openIdx + 1).filter((m) => m.action === "multi-git:term-close").length, 0, "a successful term-open is not closed again");
+// A window the server handed over is replayed into the fresh xterm before anything live arrives.
+assert.ok(fakeTerm.writes.some((w) => w.includes("PREVIOUS SESSION")), "the inherited window is replayed");
+const termSyncReq = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+assert.ok(termSyncReq, "the client acknowledges the window it rendered");
+assert.equal(termSyncReq.cursor, 18, "…with the cursor the server handed over");
+onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: termSyncReq.reqId, repo: dirtyRepo.path, resync: false, data: "WHILE-REPLAYING\r\n", offset: 18, cursor: 33 });
+await tick();
+assert.ok(fakeTerm.writes.some((w) => w.includes("WHILE-REPLAYING")), "bytes produced during the replay are not lost");
+// A successful open must leave the shell alone (the reply guard once bumped the generation and
+// immediately sent term-close for the shell it had just started).
+assert.equal(sent.filter((m) => m.action === "multi-git:term-close").length, 0, "a live shell is not closed just because it was opened");
 
 const termEl = findOne(container, "mg-term");
 assert.equal(termEl.style.display, "", "terminal strip visible after the toggle");
@@ -635,6 +651,126 @@ await tick();
 const fixedPanes = find(container, "mg-pane-fixed");
 assert.equal(fixedPanes[0].style.width, "320px", "repos pane takes the saved width");
 assert.equal(fixedPanes[1].style.width, "400px", "diff pane takes the saved width");
+
+// Hiding and re-showing reuses the same xterm and the same shell: the strip is only display:none, so
+// the scrollback and the process survive (the host's terminals outlive the view the same way).
+{
+	const opensBefore = sent.filter((m) => m.action === "multi-git:term-open").length;
+	const attachesBefore = sent.filter((m) => m.action === "multi-git:term-attach").length;
+	termBtn.onclick(); // hide
+	await tick();
+	const hidePref = sent.filter((m) => m.action === "multi-git:prefs").at(-1);
+	onData({ ...scan, reqId: hidePref.reqId, prefs: { ...scan.prefs, termVisible: false, widths: [320, 400] } });
+	await tick();
+	assert.equal(termEl.style.display, "none", "the strip hides");
+	assert.equal(fakeTerm.disposed, false, "hiding does not dispose the xterm");
+	termBtn.onclick(); // show again
+	await tick();
+	const showPref = sent.filter((m) => m.action === "multi-git:prefs").at(-1);
+	onData({ ...scan, reqId: showPref.reqId, prefs: { ...scan.prefs, termVisible: true, widths: [320, 400] } });
+	await tick();
+	assert.equal(termEl.style.display, "", "…and shows again");
+	assert.equal(sent.filter((m) => m.action === "multi-git:term-open").length, opensBefore, "no second shell is spawned");
+	assert.equal(sent.filter((m) => m.action === "multi-git:term-attach").length, attachesBefore, "…and nothing is re-attached");
+	assert.equal(fakeTerm.disposed, false, "the same xterm stays mounted");
+
+// Switching repositories reuses the pane this view already has. The server parks the shell for the
+// repo being left, so coming back is a catch-up from the cursor the pane last rendered — not a
+// teardown and a fresh render (which is what used to show as a tear).
+{
+	const firstPane = fakeTerm; // the pane the rest of the suite drives; restored at the end of this block
+	const other = scan.repos.find((r) => r.path !== dirtyRepo.path);
+	assert.ok(other, "the scan offers a second repository to switch to");
+	/** Click a repo row and answer the terminal handshake for it (fake xterm, so no real shell). */
+	const switchTo = async (repo) => {
+		rows.find((r) => r.textContent.includes(repo.name)).onclick();
+		await tick();
+		const attach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+		onData(await askServer(attach)); // the real plugin decides whether a shell is alive
+		await tick();
+		const open = sent.filter((m) => m.action === "multi-git:term-open").at(-1);
+		onData({ action: "multi-git:data", kind: "term-open", ok: true, reqId: open.reqId, repo: repo.path, shell: "bash", cols: 100, rows: 24, data: "", offset: 0, cursor: 0 });
+		await tick();
+		const sync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+		onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: sync.reqId, repo: repo.path, resync: false, data: "", offset: 0, cursor: 0 });
+		await tick();
+		return { attach, open, sync };
+	};
+	const first = await switchTo(other);
+	assert.equal(first.attach.repo, other.path, "switching attaches the pane for the repository picked");
+	assert.equal(termConstructions, 2, "a repository this view has never shown gets its own pane");
+	const back = await switchTo(dirtyRepo);
+	assert.equal(back.attach.repo, dirtyRepo.path, "going back attaches the first repository again");
+	assert.equal(termConstructions, 2, "…and reuses its pane instead of rebuilding it (no tear)");
+	// Live output advances the pane's cursor: the server sends it with every chunk and the pane keeps it,
+	// so coming back to a shell that is still alive is a catch-up rather than a replay of what it shows.
+	onData({ action: "multi-git:data", kind: "term-data", repo: dirtyRepo.path, data: "LIVE-1\r\n", cursor: 42 });
+	await tick();
+	assert.ok(firstPane.writes.some((w) => w.includes("LIVE-1")), "streamed output lands in the shown pane");
+	await switchTo(other); // hide the pane; its shell stays alive in the server's pool
+	const opensBefore = sent.filter((m) => m.action === "multi-git:term-open").length;
+	rows.find((r) => r.textContent.includes(dirtyRepo.name)).onclick();
+	await tick();
+	const backAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+	onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: backAttach.reqId, repo: dirtyRepo.path, alive: true, exited: false, data: "", offset: 42, cursor: 42 });
+	await tick();
+	const backSync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+	assert.equal(backSync.cursor, 42, "a reused pane syncs from the cursor it actually rendered");
+	assert.equal(sent.filter((m) => m.action === "multi-git:term-open").length, opensBefore, "a live pooled shell is adopted, not respawned");
+	onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: backSync.reqId, repo: dirtyRepo.path, resync: false, data: "", offset: 42, cursor: 42 });
+	await tick();
+	// A resync push re-anchors the pane, and its reply has to be applied: those are the bytes the shell
+	// printed while the hand-off was in flight.
+	onData({ action: "multi-git:data", kind: "term-resync", repo: dirtyRepo.path, data: "WINDOW\r\n", cursor: 50 });
+	await tick();
+	assert.ok(firstPane.writes.some((w) => w.includes("WINDOW")), "the resync window is written");
+	const rzSync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+	assert.equal(rzSync.cursor, 50, "the resync asks from the window it just rendered");
+	onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: rzSync.reqId, repo: dirtyRepo.path, resync: false, data: "DURING\r\n", offset: 50, cursor: 60 });
+	await tick();
+	assert.ok(firstPane.writes.some((w) => w.includes("DURING")), "bytes produced during a resync hand-off are not dropped");
+	// …and the pane now remembers 60, so the next catch-up is a delta instead of that window again.
+	await switchTo(other);
+	rows.find((r) => r.textContent.includes(dirtyRepo.name)).onclick();
+	await tick();
+	const finalAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+	onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: finalAttach.reqId, repo: dirtyRepo.path, alive: true, exited: false, data: "", offset: 60, cursor: 60 });
+	await tick();
+	const finalSync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+	assert.equal(finalSync.cursor, 60, "…so the next catch-up starts from the re-anchored end");
+	onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: finalSync.reqId, repo: dirtyRepo.path, resync: false, data: "", offset: 60, cursor: 60 });
+	await tick();
+	assert.equal(termConstructions, 2, "…with the same two panes throughout");
+	console.log("   repo switch: pane cursor follows what it rendered")
+	console.log("   repo switch: pane reused, no rebuild");
+	fakeTerm = firstPane; // `fakeTerm` tracks the last pane *constructed*; this section built another
+
+	// A resync hand-off whose reply lands after the pane moved on must not record bytes that pane never
+	// received: its cursor has to stay where it really rendered, so the gap is re-sent instead of vanishing.
+	{
+		const rendered = 70; // this pane is in sync at 60; the window it is handed ends at 70
+		onData({ action: "multi-git:data", kind: "term-resync", repo: dirtyRepo.path, data: "WINDOW\r\n", cursor: rendered });
+		await tick();
+		const handOff = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+		assert.equal(handOff.cursor, rendered, "the resync push is acknowledged from the window it rendered");
+		await switchTo(other); // the pane moves on before that reply lands
+		onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: handOff.reqId, repo: dirtyRepo.path, resync: false, data: "GAP\r\n", offset: rendered, cursor: rendered + 10 });
+		await tick();
+		assert.equal(firstPane.writes.some((w) => w.includes("GAP")), false, "a reply for a pane that moved on is not written into it");
+		rows.find((r) => r.textContent.includes(dirtyRepo.name)).onclick();
+		await tick();
+		const backAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+		onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: backAttach.reqId, repo: dirtyRepo.path, alive: true, exited: false, data: "", offset: rendered, cursor: rendered, seat: 9 });
+		await tick();
+		const backSync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+		assert.equal(backSync.cursor, rendered, "…so the next catch-up asks from what the pane really rendered");
+		onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: backSync.reqId, repo: dirtyRepo.path, resync: false, data: "REPLAYED-GAP\r\n", offset: rendered, cursor: rendered + 10 });
+		await tick();
+		assert.ok(firstPane.writes.some((w) => w.includes("REPLAYED-GAP")), "…and the dropped bytes arrive on the next catch-up instead");
+		console.log("   repo switch: a late resync reply does not advance the pane cursor");
+	}
+}
+}
 
 // typing in the terminal forwards term-input
 fakeTerm._onData("git status --short\r");
@@ -660,16 +796,24 @@ assert.equal(sent.length, sentBefore, "no term-input after exit");
 
 termBtn.onclick();
 await tick();
-const termOffPref = sent.at(-1);
+const termOffPref = sent.filter((m) => m.action === "multi-git:prefs").at(-1);
 assert.equal(termOffPref.termVisible, false);
-assert.ok(fakeTerm.disposed, "terminal disposed on hide");
-const termCloseReq = sent.find((m) => m.action === "multi-git:term-close");
-assert.ok(termCloseReq, "term-close sent on hide");
-assert.equal(termCloseReq.repo, dirtyRepo.path);
+// Hiding is not a teardown: the shell keeps running, the xterm stays mounted, and the retained
+// window is untouched — so showing the strip again is instant.
+assert.equal(fakeTerm.disposed, false, "hiding does not dispose the terminal");
+assert.equal(sent.filter((m) => m.action === "multi-git:term-close").length, 0, "…and does not kill the shell");
+assert.equal(sent.filter((m) => m.action === "multi-git:term-detach").length, 0, "…nor give up the seat");
 onData({ ...scan, reqId: termOffPref.reqId, prefs: { ...scan.prefs, termVisible: false, widths: [320, 400] } });
 await tick();
 assert.equal(termEl.style.display, "none", "terminal hides after toggling off");
-console.log("   splitters + full-terminal open/input/stream/exit/close ok");
+
+// The ✕ forgets the retained window on the server as well, so a remount cannot resurrect it.
+findOne(container, "mg-term-clear").onclick();
+await tick();
+const clearReq = sent.filter((m) => m.action === "multi-git:term-clear").at(-1);
+assert.ok(clearReq, "the ✕ clears the retained window too");
+assert.equal(clearReq.repo, dirtyRepo.path);
+console.log("   splitters + full-terminal attach/spawn/replay/sync/hide/clear ok");
 
 console.log("13a. the terminal strip resizes from its top edge");
 {
@@ -717,10 +861,14 @@ console.log("13a. the terminal strip resizes from its top edge");
 }
 
 console.log("13b. a terminal that cannot start says so, and a later trigger retries");
-termBtn.onclick(); // show the strip again → a fresh open attempt
+termBtn.onclick(); // show the strip again → a fresh attach, then an open attempt
+await tick();
+const failedAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+assert.ok(failedAttach, "showing the strip attaches first");
+onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: failedAttach.reqId, repo: dirtyRepo.path, alive: false, data: "", offset: 0, cursor: 0 });
 await tick();
 const failedReq = sent.filter((m) => m.action === "multi-git:term-open").at(-1);
-assert.ok(failedReq, "re-showing the strip sends another term-open");
+assert.ok(failedReq, "nothing to attach to, so a shell is spawned");
 const failedTerm = fakeTerm;
 onData({ action: "multi-git:data", kind: "term-open", ok: false, reqId: failedReq.reqId, error: "Unknown request: multi-git:term-open" });
 await tick();
@@ -735,19 +883,24 @@ assert.equal(sent.length, beforeTyping, "typing into a terminal that never start
 
 // the automatic retry is throttled (the pane is re-rendered by every auto-refresh tick),
 // then an explicit Term toggle retries at once — no page reload either way
-const openCountBefore = sent.filter((m) => m.action === "multi-git:term-open").length;
+// The throttle covers the whole attempt, and an attach is the first thing it would send.
+const attachCountBefore = sent.filter((m) => m.action === "multi-git:term-attach").length;
 onData({ action: "multi-git:cwd", cwd: CWD });
 await tick();
 const scanReq1 = sent.filter((m) => m.action === "multi-git:scan").at(-1);
 onData({ ...scan, reqId: scanReq1.reqId, prefs: { ...scan.prefs, termVisible: true, widths: [320, 400] } });
 await tick();
-assert.equal(sent.filter((m) => m.action === "multi-git:term-open").length, openCountBefore, "a failing open is not retried on every render");
+assert.equal(sent.filter((m) => m.action === "multi-git:term-attach").length, attachCountBefore, "a failing terminal is not retried on every render");
 termBtn.onclick(); // hide
 await tick();
 termBtn.onclick(); // and show again: an explicit toggle skips the throttle
 await tick();
+const toggleAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+assert.ok(toggleAttach && toggleAttach.reqId !== failedAttach.reqId, "toggling the strip retries immediately (attach first)");
+onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: toggleAttach.reqId, repo: dirtyRepo.path, alive: false, data: "", offset: 0, cursor: 0 });
+await tick();
 const toggleReq = sent.filter((m) => m.action === "multi-git:term-open").at(-1);
-assert.ok(toggleReq && toggleReq.reqId !== failedReq.reqId, "toggling the strip retries the open immediately");
+assert.ok(toggleReq && toggleReq.reqId !== failedReq.reqId, "…and the spawn follows the attach");
 onData({ action: "multi-git:data", kind: "term-open", ok: false, reqId: toggleReq.reqId, error: "still broken" });
 await tick();
 
@@ -760,10 +913,18 @@ const scanReq2 = sent.filter((m) => m.action === "multi-git:scan").at(-1);
 onData({ ...scan, reqId: scanReq2.reqId, prefs: { ...scan.prefs, termVisible: true, widths: [320, 400] } });
 await tick();
 Date.now = realNow;
+// The retry runs the same two steps: a fresh attach, then the spawn.
+const retryAttach = sent.filter((m) => m.action === "multi-git:term-attach").at(-1);
+assert.ok(retryAttach && retryAttach.reqId !== toggleAttach.reqId, "the retry starts with a fresh attach");
+onData({ action: "multi-git:data", kind: "term-attach", ok: true, reqId: retryAttach.reqId, repo: dirtyRepo.path, alive: false, data: "", offset: 0, cursor: 0 });
+await tick();
 const retryReq = sent.filter((m) => m.action === "multi-git:term-open").at(-1);
 assert.ok(retryReq.reqId !== toggleReq.reqId, "the open is retried once the throttle window has passed");
 assert.equal(fakeTerm.disposed, false, "the retry leaves a live xterm");
-onData({ action: "multi-git:data", kind: "term-open", ok: true, reqId: retryReq.reqId, repo: dirtyRepo.path, shell: "bash", cols: 100, rows: 24 });
+onData({ action: "multi-git:data", kind: "term-open", ok: true, reqId: retryReq.reqId, repo: dirtyRepo.path, shell: "bash", cols: 100, rows: 24, data: "", offset: 0, cursor: 0 });
+await tick();
+const retrySync = sent.filter((m) => m.action === "multi-git:term-sync").at(-1);
+onData({ action: "multi-git:data", kind: "term-sync", ok: true, reqId: retrySync.reqId, repo: dirtyRepo.path, resync: false, data: "", offset: 0, cursor: 0 });
 await tick();
 assert.equal(findOne(container, "mg-term-hint").style.display, "none", "the error hint is hidden once a shell is running");
 assert.ok(!findOne(container, "mg-term-title").textContent.includes("not running"), "title drops the failure note");

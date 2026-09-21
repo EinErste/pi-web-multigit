@@ -12,6 +12,7 @@ export function prefsPayload(opts) {
 		hideClean: opts.hideClean,
 		termVisible: opts.termVisible,
 		termHeight: opts.termHeight, // null = the stylesheet's default strip height
+		termKeep: opts.termKeep, // the client caps its cached xterm panes with the same number
 		widths: opts.widths,
 		sort: opts.sort,
 		group: opts.group,
@@ -111,6 +112,11 @@ export const GROUP_MODES = ["none", "prefix", "branch"];
 export const TERM_MIN = 120;
 
 export const TERM_MAX = 1200;
+
+/** Live repository shells kept at once (the `termKeep` setting). 16 is the host's own live-terminal cap. */
+export const TERM_KEEP_DEFAULT = 5;
+
+export const TERM_KEEP_MAX = 16;
 
 export function normTermHeight(value) {
 	if (value === null || value === undefined) return null;

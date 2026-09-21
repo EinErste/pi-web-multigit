@@ -255,11 +255,52 @@ export default defineView({
 			if (msg.kind === "term-data" && state.termActive && samePath(msg.repo, state.termRepo)) {
 				try {
 					state.termActive.write(msg.data);
+					// The pane has now rendered up to the cursor the server sent with this chunk: keep it, so
+					// coming back to this repository syncs from here rather than replaying the whole window.
+					noteRendered(msg.repo, msg.cursor);
 				} catch {
 					/* terminal died underneath us */
 				}
 				return;
 			}
+			if (msg.kind === "term-resync" && state.termActive && samePath(msg.repo, state.termRepo)) {
+				// This client fell further behind than the server's window holds: replace what is on screen
+				// with the window it hands over, then re-anchor so streaming resumes from its end.
+				try {
+					state.termActive.reset?.();
+					state.termActive.write(typeof msg.data === "string" ? msg.data : "");
+					noteRendered(msg.repo, msg.cursor);
+				} catch {
+					/* terminal died underneath us */
+				}
+				// The reply carries what the shell printed while this hand-off was in flight; applying it is
+				// the difference between a seamless resync and a hole in the pane.
+				void request("term-sync", { repo: msg.repo, cursor: Number(msg.cursor) || 0 }).then((res) => {
+					if (destroyed || !state.termActive || !samePath(msg.repo, state.termRepo)) return;
+					try {
+						if (res?.resync) {
+							state.termActive.reset?.();
+							if (typeof res.data === "string" && res.data) state.termActive.write(res.data);
+						} else if (res?.ok && typeof res.data === "string" && res.data) {
+							state.termActive.write(res.data);
+						}
+						/**
+						 * Only now record it: the pane has rendered up to this cursor. Recording it before the guard above
+						 * marked bytes this pane never received as rendered, so its next catch-up asked for the delta past
+						 * them — a hole in the pane that nothing fills until a later resync re-sends the whole window. The
+						 * resync push above already recorded the window this pane did render, so a pane that moved on in
+						 * the meantime still re-syncs from what it really has.
+						 */
+						if (res?.cursor != null) noteRendered(msg.repo, res.cursor);
+					} catch {
+						/* terminal died underneath us */
+					}
+				});
+				return;
+			}
+			// The pane records its own exit: `state.termExited` below is the view's *current* pane, so a shell that
+			// dies while another repository is selected would otherwise be forgotten (see showTerm).
+			if (msg.kind === "term-exit") markExited(msg.repo);
 			if (msg.kind === "term-exit" && state.termActive && samePath(msg.repo, state.termRepo) && !state.termExited) {
 				state.termExited = true;
 				termTitle.textContent = `terminal · ${shortName(state.termRepo ?? "")} · exited`;
@@ -365,7 +406,7 @@ export default defineView({
 			termHost,
 			termTitle,
 		});
-		const { injectTermCss, ensureTermClasses, sendTermResize, fitTerm, showTermHint, errText, failTerminal, openTerminal, closeTerminal, syncTerminal } = terminal;
+		const { injectTermCss, ensureTermClasses, sendTermResize, fitTerm, showTermHint, errText, failTerminal, markExited, noteRendered, openTerminal, disposeTerminals, syncTerminal } = terminal;
 
 		// workspace: workspace.mjs. Destructuring its result keeps the names below in
 		// scope, so the rest of mount() is unchanged.
@@ -779,6 +820,8 @@ export default defineView({
 					/* already gone */
 				}
 			}
+			// Clear the retained window as well: otherwise a remount would replay text the user just cleared.
+			if (state.termRepo) void request("term-clear", { repo: state.termRepo });
 		};
 		setupSplitter(split1, 0);
 		setupSplitter(split2, 1);
@@ -817,7 +860,8 @@ export default defineView({
 			offData();
 			pending.clear();
 			style.remove();
-			closeTerminal(false);
+			// Unmount: drop every pane, keep every shell (the server pools them; the next mount adopts).
+			disposeTerminals();
 			if (termResizeObs.value) {
 				try {
 					termResizeObs.value.disconnect();

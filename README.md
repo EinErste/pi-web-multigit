@@ -19,7 +19,7 @@ plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.6     # pin a tag (any branch/tag works)
+pi-web-ui install EinErste/pi-web-multigit#v0.13.7     # pin a tag (any branch/tag works)
 pi-web-ui install EinErste/pi-web-multigit --force     # update in place
 pi-web-ui uninstall pi-web-multigit
 ```
@@ -45,7 +45,7 @@ older host refuses the plugin instead of half-loading it; installs are refused o
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | 🧩 **Multi-repo Git** tab        | The three-pane view (repositories → tabbed middle pane → revision viewer), `plugin:multi-git`. |
 | 🌿 **Workspace** tab             | Branches across repositories: unpushed commits, tickets spanning services, cleanup candidates. |
-| ⚙ Settings → UI plugins          | The six settings below (schema-declared, no code needed).                    |
+| ⚙ Settings → UI plugins          | The seven settings below (schema-declared, no code needed).                  |
 
 ## Layout
 
@@ -120,11 +120,18 @@ strip — double-click resets it to the default 190px, arrow keys nudge it by 20
 remembered. It uses the host's own `node-pty` — or a plugin-local copy
 installed through `host.ensureDeps` if the host ships none — and the same shell the host's Terminal
 tab uses, cwd = the selected repo: `vim` / `top` / `ssh` and REPLs work, Ctrl+C works,
-`TERM=xterm-256color`. One shell at a time, killed on hide / repo switch / deactivate; output is capped
-at 200KB per flush and 64KB per input message. The shell belongs to the client that opened it: another
-client (a second tab, or whoever else the server admits) cannot type into it, and only re-opening it —
-a visible takeover that kills the previous shell — changes owner. A shell that cannot start says why in
-the strip instead of leaving an empty pane, and is retried at most once per ~20s.
+`TERM=xterm-256color`. Shells are **pooled per repository** (⚙ *Terminals kept open*, default 5, up to 16):
+switching repositories **parks** the shell instead of closing it, so coming back finds the same prompt, the
+same `cd` and the same running process — and each repository keeps its own pane, so the switch is instant
+rather than a rebuild, with nothing replayed on top of what is already on screen. Hiding the strip keeps
+both. A shell is closed when it exits, when the workspace changes, when the plugin unloads, when another
+client opens its repository, or when it is the least recently used one past the cap; its output window (200KB
+per shell) is what a genuinely new pane — a top-bar tab switch or a reload, where the view is unmounted — is
+refilled from. Output is capped at 200KB per flush and 64KB per input message. The shell belongs to the client
+that opened it: another client (a second tab, or whoever else the server admits) cannot type into it, and only
+re-opening it — a visible takeover that kills the previous shell — changes owner, and the client driving it is
+told (its pane shows the exit, like the host's own terminal reports `terminal_exit`). A shell that cannot start
+says why in the strip instead of leaving an empty pane, and is retried at most once per ~20s.
 
 **Panes and keys** — the two vertical dividers and the terminal's top edge are drag handles: each
 double-clicks back to its default, each takes arrow keys once focused, and every size is remembered.
@@ -143,6 +150,7 @@ it always says what it is looking at.
 | `autoRefreshSec`      | 15      | Periodic rescan; 0 = off.                                                           |
 | `branchGroupPattern`  | —       | Workspace tab: regex whose first capture group groups branches across repositories. Empty = group by the full branch name (recommended). Overridable per workspace in the view. |
 | `hideClean`           | false   | Start with the "Only dirty" filter applied.                                          |
+| `termKeep`            | 5       | How many repository shells stay alive at once. Switching repositories parks a shell instead of closing it; past this many, the least recently used one is closed and its output stays replayable. 16 is the host's own live-terminal limit. |
 
 The scan root is always the **project directory**, and scanning never walks upward: a workspace root
 (`~/work/acme`) gives you every repository below it, and a single repository (`~/work/acme/web-app`)
@@ -157,7 +165,8 @@ additional roots on.
   branches, stashes, the timeline and the PTY bridge are answered on demand, each reply addressed to the
   requesting client by `reqId`. The work is split by concern: `server/git.mjs` (argv-only git + path
   containment), `server/parsers.mjs` (git output → data), `server/repos.mjs` (one repo's summary),
-  `server/actions/*.mjs` (one module per action family) and `server/regex-match.mjs` (the file-name regex
+  `server/actions/*.mjs` (one module per action family), `server/terminal-pool.mjs` (the pooled shells and
+  their retained windows, over `server/terminal-log.mjs`) and `server/regex-match.mjs` (the file-name regex
   worker).
 - **Client** (`client/entry.mjs`) is plain DOM — no framework, no build step — and talks to the server
   only through `ctx.send` / `ctx.onData`. It imports nothing from outside `client/`,
@@ -267,9 +276,19 @@ silently asserts nothing is worse than no test. Steps that need a tracked change
 - `Fetch` needs working credentials for each remote; a repo that cannot authenticate is reported and
   otherwise left alone. `Pull` never merges or rebases, so a diverged branch needs handling by hand, and
   `Rollback` deletes untracked files irreversibly after the armed confirmation.
-- Exactly one terminal exists at a time and it exits when the plugin does. Windows-only quirk: `node-pty`'s
-  ConPTY agent sometimes prints a cosmetic `AttachConsole failed` on shell teardown — the host's own
-  terminal does the same.
-- Pane widths, the terminal's height and its visibility are per-plugin preferences (in
-  `<pluginDir>/storage.json`), not per-project. The strip is at least 120px tall and never taller than
-  the pane minus 140px, so the list above it always keeps room.
+- Up to *Terminals kept open* shells stay alive, one real process each; past the cap the least recently used
+  is closed and its output window stays readable. Windows are 200KB per shell: one for each live shell plus
+  up to 32 repositories whose shells are gone (memory only — a server restart loses them). Closing a shell
+  on Windows can also leave a node-pty conout worker thread behind until the server restarts: that is upstream
+  behaviour, the host's own terminal manager spawns identically and has the same residue, and it does not
+  change what the plugin keeps.
+- Windows-only quirk: `node-pty`'s ConPTY agent sometimes prints a cosmetic `AttachConsole failed` on shell
+  teardown — the host's own terminal does the same.
+- One pane, one client. A second client that **opens the repository you are driving** takes it over: the
+  shell it replaces is killed and your pane is told (the exit shows in it), because a pane left claiming to
+  be alive would silently swallow every keystroke. One that opens a *different* repository parks the shell
+  you were driving instead — it keeps running, your strip just goes quiet until you select that repository
+  again and adopt it. Hiding the strip is neither: the pane is hidden, the shell stays attached.
+- Pane widths and the terminal's height/visibility are per-plugin preferences (in `<pluginDir>/storage.json`)
+  and *Terminals kept open* is a plugin-wide setting — none of them are per-project. The strip is at least
+  120px tall and never taller than the pane minus 140px, so the list above it always keeps room.
