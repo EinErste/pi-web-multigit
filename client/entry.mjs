@@ -1,15 +1,12 @@
 /**
  * multi-git — client view (loaded as a bare ESM bundle by the host).
  *
- * Two responsibilities:
- *  1. the plugin view tab (`plugin:multi-git`): a three-pane overview — repositories
- *     on the left; a tabbed middle pane (Changes | History | Branches | Stashes |
- *     Timeline), plus cross-repo code search in the header; the diff/revision viewer
- *     on the right;
- *  2. the `scm.toolbar` action registered in manifest.json, which switches to that view.
+ * One responsibility: the plugin view tab (`plugin:multi-git`) — a three-pane overview with
+ * repositories on the left; a tabbed middle pane (Changes | History | Branches | Stashes |
+ * Workspace | Timeline) plus cross-repo code search in the header; the diff/revision viewer
+ * on the right.
  *
- * Everything the host provides arrives through the narrow ctx channel (`send` /
- * `onData`); the action bridge is only used for view switching.
+ * Everything the host provides arrives through the narrow ctx channel (`send` / `onData`).
  */
 
 import { createBridge } from "./bridge.mjs";
@@ -122,15 +119,6 @@ const TAB_DEFS = [
 	{ id: "workspace", label: "Workspace" },
 ];
 
-/**
- * The source-control toolbar button. Registered at module scope so it also works
- * before (or without) the view being mounted — the host loads this bundle on demand
- * when a plugin action fires.
- */
-onUiAction(`${PLUGIN_ID}:open`, () => {
-	const bridge = globalThis.window?.__piWebUiHost;
-	if (bridge && typeof bridge.setView === "function") bridge.setView(`plugin:${PLUGIN_ID}`);
-});
 
 /**
  * SDK helpers, inlined on purpose. The host serves a plugin's static files from
@@ -138,17 +126,8 @@ onUiAction(`${PLUGIN_ID}:open`, () => {
  * from here would resolve to `/plugins/<id>/sdk/index.mjs`, miss that route, fall through
  * to the SPA fallback and come back as HTML — which kills the whole module graph: the view
  * never mounts and every UI action reports "the plugin does not handle this action".
- * So this bundle imports nothing and carries the two helpers it needs.
+ * So this bundle imports nothing and carries the one helper it needs.
  */
-function onUiAction(action, handler) {
-	try {
-		const bridge = globalThis.window?.__piWebUiHost;
-		if (bridge && typeof bridge.onUiAction === "function") return bridge.onUiAction(action, handler);
-	} catch {
-		/* no bridge: not in a browser, or an older host */
-	}
-	return () => {};
-}
 
 function defineView(view) {
 	if (!view || typeof view !== "object") throw new Error("[multi-git] defineView needs an object");

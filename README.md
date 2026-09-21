@@ -19,7 +19,7 @@ plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.4     # pin a tag (any branch/tag works)
+pi-web-ui install EinErste/pi-web-multigit#v0.13.5     # pin a tag (any branch/tag works)
 pi-web-ui install EinErste/pi-web-multigit --force     # update in place
 pi-web-ui uninstall pi-web-multigit
 ```
@@ -45,7 +45,6 @@ older host refuses the plugin instead of half-loading it; installs are refused o
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | 🧩 **Multi-repo Git** tab        | The three-pane view (repositories → tabbed middle pane → revision viewer), `plugin:multi-git`. |
 | 🌿 **Workspace** tab             | Branches across repositories: unpushed commits, tickets spanning services, cleanup candidates. |
-| 🌿 **All repos** in the git pane | Shortcut in the built-in SCM toolbar that switches to the tab above.         |
 | ⚙ Settings → UI plugins          | The six settings below (schema-declared, no code needed).                    |
 
 ## Layout
@@ -157,8 +156,7 @@ additional roots on.
   `server/actions/*.mjs` (one module per action family) and `server/regex-match.mjs` (the file-name regex
   worker).
 - **Client** (`client/entry.mjs`) is plain DOM — no framework, no build step — and talks to the server
-  only through `ctx.send` / `ctx.onData`; the host action bridge is used for the one thing it cannot do
-  itself, `setView("plugin:multi-git")` from the SCM toolbar. It imports nothing from outside `client/`,
+  only through `ctx.send` / `ctx.onData`. It imports nothing from outside `client/`,
   because such a request misses the plugin's static route and comes back as the SPA fallback HTML (blank
   tab). The xterm engine is vendored under `client/vendor/xterm/`; `sdk/` is for the server entry only.
 - **Safety** — git runs as `execFile("git", [...args])`, an argv array and never a shell, and every
@@ -171,12 +169,14 @@ additional roots on.
 
 ### Declared capabilities
 
-`permissions: ["ui"]` — only the UI message channel, settings and plugin storage come from the host;
-discovery and git execution happen in this plugin's own server-side code, which the plugin system
-documents as trusted Node code (the capability gate covers host-provided APIs, not
-`node:child_process`). The gated alternative, `host.bash` (`tools`), splits its command on whitespace
-and refuses cwds outside the workspace — useless as soon as the agent's cwd is one of the listed
-repositories.
+`permissions: []` — the plugin declares no gated capability, so the first activation asks for
+nothing. Every host API it uses (the UI message channel, settings, plugin storage, cwd events) is
+ungated, and discovery plus git execution run in this plugin's own server-side code, which the
+plugin system documents as trusted Node code (the capability gate covers host-provided APIs, not
+`node:child_process`). It contributes no UI slots either: the view is its own tab and nothing is
+injected into the built-in panes. The gated alternative, `host.bash` (`tools`), splits its command
+on whitespace and refuses cwds outside the workspace — useless as soon as the agent's cwd is one of
+the listed repositories.
 
 ## Develop (local edits)
 
@@ -233,8 +233,8 @@ npm test -- /path/to/workspace                 # all three (also: WORKSPACE=… 
   `term-close`; a failing open is throttled to one automatic attempt per 20s), health chips, filter,
   grouping (through the pure `groupBranches` helper), Fetch and the `-w` round trip.
 - **`host-loader.test.mjs`** copies the plugin into a throwaway data dir and loads it through pi-web-ui's
-  own `PluginManager`: zero diagnostics, the merged `scm.toolbar` contribution, the settings schema,
-  message routing over a captured socket and client-bundle resolution (including a refused traversal).
+  own `PluginManager`: zero diagnostics, no UI slot contributions, the settings schema, message
+  routing over a captured socket and client-bundle resolution (including a refused traversal).
   It finds the installed package in the usual global locations; override with `PI_WEB_PKG=/path/to/pi-web-ui`.
 
 The suites also build their own throwaway fixture repository (bare origin + clone, a `release/<date>`

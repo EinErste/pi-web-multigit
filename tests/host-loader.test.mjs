@@ -67,12 +67,11 @@ console.log(
 );
 
 console.log("\n2. manifest.ui as merged by the host");
-assert.equal(info.ui.items.length, 1, "exactly one slot item expected");
-const item = info.ui.items[0];
-assert.equal(item.slot, "scm.toolbar", "slot must be the SCM toolbar");
-assert.equal(item.kind, "action");
-assert.equal(item.action, "multi-git:open");
-console.log(JSON.stringify(info.ui.items, null, 1));
+// The plugin contributes no host UI slots by design: its view is reached through its own tab, so
+// nothing is injected into the built-in panes (the SCM toolbar button was removed in 0.13.5).
+// The host omits `ui` entirely when a plugin contributes nothing, so tolerate both shapes.
+assert.deepEqual(info.ui?.items ?? [], [], "no slot contributions expected");
+console.log(JSON.stringify(info.ui?.items ?? [], null, 1));
 
 console.log("\n3. settings schema + values");
 // Compare against the manifest itself: a hardcoded count breaks every time a setting is added, and
