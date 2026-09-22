@@ -1,5 +1,9 @@
 # multi-git — pi-web-ui UI plugin
 
+> Part of **[pi-web-ui](https://github.com/xing-shuyin/pi-web-ui)** — a browser cockpit for AI coding
+> agents (chat, code, files, terminal, Git in one tab; `npm i -g pi-web-ui`). This plugin adds a tab to
+> it and does nothing on its own.
+
 A **read-only** overview of every Git repository in a workspace made of several independent
 repositories. The host's built-in source-control pane runs git in exactly one directory — the active
 conversation cwd — so a workspace root has no `.git` and permanently reports *"Current directory is
@@ -13,9 +17,10 @@ file's local changes).
 
 ## Install
 
-pi-web-ui plugins are distributed as GitHub repositories, not as npm packages — the plugin catalogue
-only stores sources. Install, update and remove this one with the CLI, or from **⚙ Settings → UI
-plugins → plugin market → Add plugin** by pasting `EinErste/pi-web-multigit`:
+[pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugins are distributed as GitHub repositories,
+not as npm packages — the plugin catalogue only stores sources. Install, update and remove this one
+with the CLI, or from **⚙ Settings → UI plugins → plugin market → Add plugin** by pasting
+`EinErste/pi-web-multigit`:
 
 ```bash
 pi-web-ui install EinErste/pi-web-multigit             # latest main
