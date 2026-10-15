@@ -1,7 +1,7 @@
 {
 	"id": "pi-web-multigit",
 	"name": "Multi-repo Git",
-	"version": "0.13.7",
+	"version": "0.14.0",
 	"description": "Overview of every Git repository in the workspace — changes, diffs, history, branches, stashes, timeline, cross-repo search. Read-only except three deliberate writes: Fetch, Pull (fast-forward only) and per-file Rollback.",
 	"apiVersion": 2,
 	"icon": "🌿",
