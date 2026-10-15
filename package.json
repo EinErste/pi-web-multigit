@@ -1,10 +1,22 @@
 {
- "name": "pi-web-multigit-plugin",
- "private": true,
- "type": "module",
- "description": "pi-web-ui plugin: read-only overview of every Git repository in the workspace",
- "scripts": {
-  "test": "node tests/run.mjs",
-  "test:host": "node tests/run.mjs --only=host"
- }
+	"name": "pi-web-multigit-plugin",
+	"private": true,
+	"type": "module",
+	"description": "Multi-repo Git overview — branches, changes, diffs, history, stashes, timeline and cross-repo search for every repository in a workspace, as a pi package (/multigit + standalone server) and as a pi-web-ui plugin",
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/multigit.ts"
+		]
+	},
+	"scripts": {
+		"test": "node tests/run.mjs",
+		"test:host": "node tests/run.mjs --only=host",
+		"test:standalone": "node standalone/test.mjs",
+		"test:all": "npm test && npm run test:standalone",
+		"multigit": "node standalone/multigit.mjs --open",
+		"link:pi-web-ui": "node standalone/link-pi-web-ui.mjs"
+	}
 }

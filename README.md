@@ -1,48 +1,59 @@
-# multi-git — pi-web-ui UI plugin
-
-> Part of **[pi-web-ui](https://github.com/xing-shuyin/pi-web-ui)** — a browser cockpit for AI coding
-> agents (chat, code, files, terminal, Git in one tab; `npm i -g pi-web-ui`). This plugin adds a tab to
-> it and does nothing on its own.
+# multi-git — multi-repo Git overview
 
 A **read-only** overview of every Git repository in a workspace made of several independent
-repositories. The host's built-in source-control pane runs git in exactly one directory — the active
-conversation cwd — so a workspace root has no `.git` and permanently reports *"Current directory is
-not a Git repository"*. This plugin discovers every repository below the workspace root and shows them
-in one view: branch, upstream ahead/behind, staged / modified / untracked counts, the last commit,
-per-file diffs, history, branches, stashes, a timeline and cross-repo search.
+repositories, as a **pi package** and as a **pi-web-ui plugin** from one checkout:
 
-Every git query is read-only. Three things deliberately write: the optional **terminal strip** (exactly
-the command you type, in the selected repo), **Pull** (fetch + fast-forward only) and **Rollback** (one
-file's local changes).
+| Host | How you reach it | What runs |
+| --- | --- | --- |
+| **pi** | `/multigit` | The standalone server, started **in the pi process** on a random loopback port and closed on `session_shutdown`, opening the view in your browser |
+| pi-web-ui | the 🌿 **Multi-repo Git** tab | The same view behind pi-web-ui's plugin channel, from this same directory via a junction |
+
+The host's built-in source-control pane runs git in exactly one directory — the active conversation
+cwd — so a workspace root has no `.git` and permanently reports *"Current directory is not a Git
+repository"*. This plugin discovers every repository below the workspace root and shows them in one
+view: branch, upstream ahead/behind, staged / modified / untracked counts, the last commit, per-file
+diffs, history, branches, stashes, a timeline and cross-repo search.
+
+Every git query is read-only. Two things deliberately write: **Pull** (fetch + fast-forward only) and
+**Rollback** (one file's local changes).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `/multigit` | Open the overview for the **session's working directory** |
+| `/multigit:start` | The same command, spelled out against `/multigit:stop` |
+| `/multigit <path>` | Open that path instead — a **one-off**; it is not remembered |
+| `/multigit:stop` | Stop the server — the open browser tab stops working |
+
+The scan root is the session's cwd, which is the same directory the pi-web-ui plugin scans. Nothing is
+remembered: a stored root would be a second source of truth next to the directory pi is actually in.
 
 ## Install
 
-[pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) plugins are distributed as GitHub repositories,
-not as npm packages — the plugin catalogue only stores sources. Install, update and remove this one
-with the CLI, or from **⚙ Settings → UI plugins → plugin market → Add plugin** by pasting
-`EinErste/pi-web-multigit`:
+The repository *is* the pi package: `package.json` declares
 
-```bash
-pi-web-ui install EinErste/pi-web-multigit             # latest main
-pi-web-ui install EinErste/pi-web-multigit#v0.13.7     # pin a tag (any branch/tag works)
-pi-web-ui install EinErste/pi-web-multigit --force     # update in place
-pi-web-ui uninstall pi-web-multigit
+```json
+"pi": { "extensions": ["./extensions/multigit.ts"] }
 ```
 
-Refresh the browser tab afterwards — no server restart is needed. The install lands in
-`<dataDir>/plugins/pi-web-multigit/` (`dataDir` defaults to `~/.pi-web/`), and a directory copied in by
-hand works just as well.
+so pi loads the launcher from this checkout wherever it lives — clone it anywhere, or point
+`MULTIGIT_PLUGIN_DIR` at another checkout to test one.
 
-**Updates** preserve `config.json` only — local UI state lives in `storage.json` (pane widths, folded
-segments, favourites, pivot) and the consent marker in `.pi-approved`, so back both up before a forced
-reinstall. `pi-web-ui plugins --rollback pi-web-multigit` restores the newest pre-upgrade snapshot.
+- **pi** — this checkout sits in `~/.pi/agent/extensions/pi-web-multigit/`, which pi discovers by that
+  manifest. Add `/reload` after pulling changes.
+- **pi-web-ui** — needs the plugin at `<dataDir>/plugins/pi-web-multigit/`, so it reaches across with a
+  directory junction: `npm run link:pi-web-ui` (see `standalone/link-pi-web-ui.mjs`). A junction, not a
+  copy, so the two hosts can never drift apart. Reload pi-web-ui's plugins after creating it. It can
+  also be installed as a pi-web-ui plugin the usual way (`pi-web-ui install EinErste/pi-web-multigit`).
+- **by hand** — `npm run multigit` (add `-- --root <path>` to open a specific workspace).
 
-**Requirements:** `git` on `PATH`, plus `node-pty` for the terminal strip. It prefers the copy the host
-already ships (same ConPTY machinery, nothing vendored) and falls back to `host.ensureDeps(["node-pty"])`
-— the documented dependency path, installed into the plugin directory and needing no extra capability —
-if a host ever stops shipping it. Activation needs a host whose plugin API is `apiVersion: 2`, so an
-older host refuses the plugin instead of half-loading it; installs are refused on managed instances
-(`PI_WEB_MANAGED=1`), where plugins are the deployer's responsibility.
+**Requirements:** `git` on `PATH`. Local UI state lives in `storage.json` (pane widths, folded segments,
+favourites) and the consent marker in `.pi-approved`, so back both up before a forced reinstall.
+`pi-web-ui plugins --rollback pi-web-multigit` restores the newest pre-upgrade snapshot. Activation needs
+a host whose plugin API is `apiVersion: 2`, so an older host refuses the plugin instead of half-loading it;
+installs are refused on managed instances (`PI_WEB_MANAGED=1`), where plugins are the deployer's
+responsibility.
 
 ## Where it shows up
 
@@ -50,7 +61,7 @@ older host refuses the plugin instead of half-loading it; installs are refused o
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | 🧩 **Multi-repo Git** tab        | The three-pane view (repositories → tabbed middle pane → revision viewer), `plugin:multi-git`. |
 | 🌿 **Workspace** tab             | Branches across repositories: unpushed commits, tickets spanning services, cleanup candidates. |
-| ⚙ Settings → UI plugins          | The seven settings below (schema-declared, no code needed).                  |
+| ⚙ Settings → UI plugins          | The six settings below (schema-declared, no code needed).                    |
 
 ## Layout
 
@@ -119,29 +130,9 @@ whatever `pull.rebase` says). Repos mid-merge/rebase or holding `index.lock` are
 branches are reported and left alone, and every result is listed (`updated` / `up-to-date` / `diverged`
 / `skipped` / `blocked`). Both are two-click confirmed and followed by a rescan.
 
-**Terminal** — the **Terminal** button under the middle pane's tabs toggles a real PTY shell at the
-bottom of that pane (visibility persists). Its **top edge is a drag handle**: pull it up for a taller
-strip — double-click resets it to the default 190px, arrow keys nudge it by 20px, and the height is
-remembered. It uses the host's own `node-pty` — or a plugin-local copy
-installed through `host.ensureDeps` if the host ships none — and the same shell the host's Terminal
-tab uses, cwd = the selected repo: `vim` / `top` / `ssh` and REPLs work, Ctrl+C works,
-`TERM=xterm-256color`. Shells are **pooled per repository** (⚙ *Terminals kept open*, default 5, up to 16):
-switching repositories **parks** the shell instead of closing it, so coming back finds the same prompt, the
-same `cd` and the same running process — and each repository keeps its own pane, so the switch is instant
-rather than a rebuild, with nothing replayed on top of what is already on screen. Hiding the strip keeps
-both. A shell is closed when it exits, when the workspace changes, when the plugin unloads, when another
-client opens its repository, or when it is the least recently used one past the cap; its output window (200KB
-per shell) is what a genuinely new pane — a top-bar tab switch or a reload, where the view is unmounted — is
-refilled from. Output is capped at 200KB per flush and 64KB per input message. The shell belongs to the client
-that opened it: another client (a second tab, or whoever else the server admits) cannot type into it, and only
-re-opening it — a visible takeover that kills the previous shell — changes owner, and the client driving it is
-told (its pane shows the exit, like the host's own terminal reports `terminal_exit`). A shell that cannot start
-says why in the strip instead of leaving an empty pane, and is retried at most once per ~20s.
-
-**Panes and keys** — the two vertical dividers and the terminal's top edge are drag handles: each
-double-clicks back to its default, each takes arrow keys once focused, and every size is remembered.
-Repos and diff stay pixel-fixed while the middle pane absorbs the remainder, and the terminal can never
-grow so tall that the list above it disappears.
+**Panes** — the two vertical dividers are drag handles: each double-clicks back to its default, takes
+arrow keys once focused, and every size is remembered. Repos and diff stay pixel-fixed while the middle
+pane absorbs the remainder.
 `↑`/`↓` walk the repository list and `r` rescans. Every list marks the row the Diff pane is showing, so
 it always says what it is looking at.
 
@@ -155,7 +146,6 @@ it always says what it is looking at.
 | `autoRefreshSec`      | 15      | Periodic rescan; 0 = off.                                                           |
 | `branchGroupPattern`  | —       | Workspace tab: regex whose first capture group groups branches across repositories. Empty = group by the full branch name (recommended). Overridable per workspace in the view. |
 | `hideClean`           | false   | Start with the "Only dirty" filter applied.                                          |
-| `termKeep`            | 5       | How many repository shells stay alive at once. Switching repositories parks a shell instead of closing it; past this many, the least recently used one is closed and its output stays replayable. 16 is the host's own live-terminal limit. |
 
 The scan root is always the **project directory**, and scanning never walks upward: a workspace root
 (`~/work/acme`) gives you every repository below it, and a single repository (`~/work/acme/web-app`)
@@ -167,23 +157,21 @@ additional roots on.
 - **Server** (`index.mjs`) scans the project directory (`host.cwd`) depth-first for directories containing
   `.git` (a `.git` **file** counts too — worktrees and submodules), then runs the status / last-commit /
   worktree / submodule queries per repo with bounded concurrency (6 at a time). Diffs, history, search,
-  branches, stashes, the timeline and the PTY bridge are answered on demand, each reply addressed to the
+  branches, stashes and the timeline are answered on demand, each reply addressed to the
   requesting client by `reqId`. The work is split by concern: `server/git.mjs` (argv-only git + path
   containment), `server/parsers.mjs` (git output → data), `server/repos.mjs` (one repo's summary),
-  `server/actions/*.mjs` (one module per action family), `server/terminal-pool.mjs` (the pooled shells and
-  their retained windows, over `server/terminal-log.mjs`) and `server/regex-match.mjs` (the file-name regex
+  `server/actions/*.mjs` (one module per action family) and `server/regex-match.mjs` (the file-name regex
   worker).
 - **Client** (`client/entry.mjs`) is plain DOM — no framework, no build step — and talks to the server
   only through `ctx.send` / `ctx.onData`. It imports nothing from outside `client/`,
   because such a request misses the plugin's static route and comes back as the SPA fallback HTML (blank
-  tab). The xterm engine is vendored under `client/vendor/xterm/`; `sdk/` is for the server entry only.
+  tab). `sdk/` is for the server entry only.
 - **Safety** — git runs as `execFile("git", [...args])`, an argv array and never a shell, and every
   repo/path coming from the client is validated against the repositories found by the last scan, so
   unknown repositories and path escapes are refused (`ok: false`) instead of thrown. Containment is
   realpath-based, so a symlink inside a repository that points out of it is refused too — a lexical
   check alone would have previewed that outside file. Rollback acts on one file: a path matching several
-  entries (a directory, a glob) is refused rather than reverted wholesale. The terminal is the one
-  deliberate write-side hole.
+  entries (a directory, a glob) is refused rather than reverted wholesale.
 
 ### Declared capabilities
 
@@ -212,11 +200,11 @@ re-imported when the file changes:
 
 | You changed                           | What to do                                   |
 | ------------------------------------- | -------------------------------------------- |
-| `client/entry.mjs` (view, CSS, xterm) | refresh the browser tab (⌘/Ctrl-R)            |
+| `client/entry.mjs` (view, CSS)        | refresh the browser tab (⌘/Ctrl-R)            |
 | `index.mjs`, `manifest.json`, `sdk/`  | restart pi-web-ui — then refresh the tab      |
 
 Skipping that restart gives a **mixed install**: the browser runs the new view while the process still
-answers with the old server half (`Unknown request: multi-git:term-open` for whatever action you just
+answers with the old server half (`Unknown request: multi-git:<action>` for whatever action you just
 added). There is no reload button in the settings panel — the frontend only sends `plugins_reload` after
 a terminal command that looks like a plugin install (`pi-web-ui install …` / `npm i -g …`), which also
 bumps the `epoch` in the bundle URL so the bundle is re-imported. `plugins_reload` is a plain WebSocket
@@ -242,18 +230,19 @@ npm test -- /path/to/workspace                 # all three (also: WORKSPACE=… 
 
 - **`server.test.mjs`** activates the plugin with `createMockHost` from the vendored `sdk/` copy and runs
   real git against the workspace: scan, detail queries, search guards, branches, sync, stashes, timeline,
-  the workspace views (blame, compare, file/pickaxe search modes), a project switch mid-scan, rollback
-  and pull against a throwaway bare origin plus two clones, and the PTY bridge against a **real**
-  `node-pty` shell.
+  the workspace views (blame, compare, file/pickaxe search modes), a project switch mid-scan, and rollback
+  and pull against a throwaway bare origin plus two clones.
 - **`client.test.mjs`** drives `mount()` through a ~60-line DOM stub: scan → select repo → stats → file →
-  diff → history → commit patch → prefs → cleanup, plus the Branches/Stashes/Timeline tabs, splitters, the
-  Term toggle through an injected fake xterm (a successful `term-open` is never followed by a
-  `term-close`; a failing open is throttled to one automatic attempt per 20s), health chips, filter,
-  grouping (through the pure `groupBranches` helper), Fetch and the `-w` round trip.
+  diff → history → commit patch → prefs → cleanup, plus the Branches/Stashes/Timeline tabs, splitters,
+  health chips, filter, grouping (through the pure `groupBranches` helper), Fetch and the `-w` round trip.
 - **`host-loader.test.mjs`** copies the plugin into a throwaway data dir and loads it through pi-web-ui's
   own `PluginManager`: zero diagnostics, no UI slot contributions, the settings schema, message
   routing over a captured socket and client-bundle resolution (including a refused traversal).
   It finds the installed package in the usual global locations; override with `PI_WEB_PKG=/path/to/pi-web-ui`.
+
+`standalone/test.mjs` covers the other host: it starts the real standalone server and drives it over HTTP
+(routing, content types, the traversal guard, the action families, the correlation ids and the prefs round
+trip through `storage.json`). `npm run test:standalone` runs it; `npm run test:all` runs everything.
 
 The suites also build their own throwaway fixture repository (bare origin + clone, a `release/<date>`
 branch with a cherry-pick, a tag, a modified/staged/untracked work tree), because a diff test that
@@ -262,7 +251,7 @@ silently asserts nothing is worse than no test. Steps that need a tracked change
 
 ## Known limitations
 
-- Read-only by design: no stage / unstage / commit / push and no branch operations. The three deliberate
+- Read-only by design: no stage / unstage / commit / push and no branch operations. The two deliberate
   exceptions are listed at the top.
 - Discovery is directory-based: a `.git` deeper than `depth` levels is not found (raise `depth`), the scan
   stops at `maxRepos` repositories and 4000 visited directories, and the footer reports `scan truncated`.
@@ -281,19 +270,4 @@ silently asserts nothing is worse than no test. Steps that need a tracked change
 - `Fetch` needs working credentials for each remote; a repo that cannot authenticate is reported and
   otherwise left alone. `Pull` never merges or rebases, so a diverged branch needs handling by hand, and
   `Rollback` deletes untracked files irreversibly after the armed confirmation.
-- Up to *Terminals kept open* shells stay alive, one real process each; past the cap the least recently used
-  is closed and its output window stays readable. Windows are 200KB per shell: one for each live shell plus
-  up to 32 repositories whose shells are gone (memory only — a server restart loses them). Closing a shell
-  on Windows can also leave a node-pty conout worker thread behind until the server restarts: that is upstream
-  behaviour, the host's own terminal manager spawns identically and has the same residue, and it does not
-  change what the plugin keeps.
-- Windows-only quirk: `node-pty`'s ConPTY agent sometimes prints a cosmetic `AttachConsole failed` on shell
-  teardown — the host's own terminal does the same.
-- One pane, one client. A second client that **opens the repository you are driving** takes it over: the
-  shell it replaces is killed and your pane is told (the exit shows in it), because a pane left claiming to
-  be alive would silently swallow every keystroke. One that opens a *different* repository parks the shell
-  you were driving instead — it keeps running, your strip just goes quiet until you select that repository
-  again and adopt it. Hiding the strip is neither: the pane is hidden, the shell stays attached.
-- Pane widths and the terminal's height/visibility are per-plugin preferences (in `<pluginDir>/storage.json`)
-  and *Terminals kept open* is a plugin-wide setting — none of them are per-project. The strip is at least
-  120px tall and never taller than the pane minus 140px, so the list above it always keeps room.
+- Pane widths are per-plugin preferences (in `<pluginDir>/storage.json`), not per-project.

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="dark" />
+		<title>Multi-repo Git</title>
+		<link rel="stylesheet" href="/theme.css" />
+	</head>
+	<body>
+		<div id="multi-git-root">
+			<div class="mg-boot"><span class="mg-boot-spin"></span> starting the multi-repo Git view…</div>
+		</div>
+
+		<script type="module">
+			// The host shim is a module so that standalone/mount-check.mjs can drive the same code.
+			import { createHttpContext } from "/multi-git-ctx.mjs";
+
+			const root = document.getElementById("multi-git-root");
+			try {
+				const { default: entry } = await import("/client/entry.mjs");
+				root.textContent = "";
+				entry.mount(root, createHttpContext());
+			} catch (err) {
+				// A module that will not parse is almost always a *serving* problem (a wrong MIME type on
+				// .mjs makes the browser refuse it), and its own console message names no file — so say which.
+				root.innerHTML = "";
+				const box = document.createElement("div");
+				box.className = "mg-boot";
+				box.append("Could not load /client/entry.mjs — ");
+				const detail = document.createElement("code");
+				detail.textContent = err?.message ?? String(err);
+				box.append(detail);
+				root.append(box);
+				console.error("[multi-git] mount failed", err);
+			}
+		</script>
+	</body>
+</html>
