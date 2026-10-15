@@ -40,7 +40,7 @@ console.log(`workspace:         ${CWD}`);
 
 const DATA = mkdtempSync(join(tmpdir(), "multi-git-loader-"));
 mkdirSync(join(DATA, "plugins"), { recursive: true });
-cpSync(PLUGIN_SRC, join(DATA, "plugins", "multi-git"), { recursive: true });
+cpSync(PLUGIN_SRC, join(DATA, "plugins", "pi-web-multigit"), { recursive: true });
 const cleanupFs = () => rmSync(DATA, { recursive: true, force: true });
 
 const { PluginManager, resolvePluginClientFile } = await import(pathToFileURL(join(PKG, "dist/server/plugins.js")).href);
@@ -54,7 +54,7 @@ pm.addSender(
 
 console.log("\n1. reload() — scan, manifest validation, activation");
 const list = await pm.reload(() => "en");
-const info = list.find((p) => p.id === "multi-git");
+const info = list.find((p) => p.id === "pi-web-multigit");
 assert.ok(info, `plugin missing from the list; got: ${list.map((p) => p.id).join(",") || "(none)"}`);
 assert.equal(info.error, undefined, `loader reported an error: ${info.error}`);
 assert.equal(info.view, true, "the plugin must expose a view tab");
@@ -87,18 +87,18 @@ assert.ok(info.settingsSchema.every((s) => s.type === "text" || s.type === "numb
 console.log(info.settingsSchema.map((s) => `${s.key}:${s.type}${s.default === undefined ? "" : `=${s.default}`}`).join("  "));
 
 console.log("\n4. diagnostics must be clean");
-assert.deepEqual(pm.runtimeDiags.get("multi-git") ?? [], [], "no runtime diagnostics");
+assert.deepEqual(pm.runtimeDiags.get("pi-web-multigit") ?? [], [], "no runtime diagnostics");
 assert.ok(
-	(pm.pluginLogs.get("multi-git") ?? []).some((l) => l.text.includes("multi-git ready")),
+	(pm.pluginLogs.get("pi-web-multigit") ?? []).some((l) => l.text.includes("multi-git ready")),
 	"activation should be logged",
 );
-console.log(`logs: ${JSON.stringify((pm.pluginLogs.get("multi-git") ?? []).map((l) => `${l.level}: ${l.text}`))}`);
+console.log(`logs: ${JSON.stringify((pm.pluginLogs.get("pi-web-multigit") ?? []).map((l) => `${l.level}: ${l.text}`))}`);
 
 console.log("\n5. message routing through the host");
-pm.handleMessage("multi-git", { action: "multi-git:scan", reqId: 42 }, "client-x");
-pm.handleMessage("multi-git", { action: "other-plugin:thing" }, "client-x"); // foreign action: ignored
+pm.handleMessage("pi-web-multigit", { action: "multi-git:scan", reqId: 42 }, "client-x");
+pm.handleMessage("pi-web-multigit", { action: "other-plugin:thing" }, "client-x"); // foreign action: ignored
 await new Promise((r) => setTimeout(r, 5_000));
-const data = captured.filter((m) => m.type === "plugin_data" && m.pluginId === "multi-git");
+const data = captured.filter((m) => m.type === "plugin_data" && m.pluginId === "pi-web-multigit");
 assert.equal(data.length, 1, `expected exactly one reply, got ${data.length}`);
 assert.equal(data[0].payload.kind, "repos");
 assert.equal(data[0].payload.reqId, 42);
@@ -106,14 +106,14 @@ assert.ok(data[0].payload.repos.length > 0, "the reply must carry repositories")
 console.log(`   kind=${data[0].payload.kind} reqId=${data[0].payload.reqId} repos=${data[0].payload.repos.length}`);
 
 console.log("\n6. client bundle resolution (GET /plugins/:id/client/*)");
-const entry = resolvePluginClientFile(join(DATA, "plugins"), "multi-git", "entry.mjs");
+const entry = resolvePluginClientFile(join(DATA, "plugins"), "pi-web-multigit", "entry.mjs");
 assert.ok(entry && entry.endsWith("entry.mjs"), "client entry must resolve");
-assert.equal(resolvePluginClientFile(join(DATA, "plugins"), "multi-git", "../manifest.json"), null, "traversal refused");
+assert.equal(resolvePluginClientFile(join(DATA, "plugins"), "pi-web-multigit", "../manifest.json"), null, "traversal refused");
 console.log(`   entry.mjs resolved; ../manifest.json refused`);
 
 console.log("\n7. reload re-activates cleanly");
 await pm.reload(() => "en");
-assert.deepEqual(pm.runtimeDiags.get("multi-git") ?? [], [], "still no diagnostics after reload");
+assert.deepEqual(pm.runtimeDiags.get("pi-web-multigit") ?? [], [], "still no diagnostics after reload");
 
 console.log("\nHOST-LOADER CHECKS PASSED");
 pm.dispose();

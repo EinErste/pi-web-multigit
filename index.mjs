@@ -19,13 +19,8 @@
  *   windowsHide). It never writes to a repository: only status/diff/log/show/
  *   ls-files/grep/for-each-ref/stash list/stash show/branch/worktree list/submodule
  *   status and similar read-only commands are executed.
- * - The terminal strip is the single write-side exception: a REAL full PTY shell
- *   (node-pty, loaded from the host's own node_modules — the same library the host's
- *   terminal tab uses), pinned to the selected repo's directory. Running vim/top/ssh
- *   etc. works, exactly like the host terminal. Only the shell can write to the repo;
- *   everything else in the plugin stays read-only.
  * - Only the `ui` capability is declared; the host API surface used is the UI channel
- *   (onMessage/sendTo/broadcast) plus settings and storage. Discovery and git work are
+ *   (onMessage/sendTo) plus settings and storage. Discovery and git work are
  *   done by this plugin's own server-side code, which is trusted Node code by design.
  * - Every inbound message is answered to its sender (clients match on reqId) and every
  *   failure becomes a structured `ok:false` reply instead of an exception thrown into
@@ -38,23 +33,18 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_AUTO_REFRESH_SEC, GIT_CONCURRENCY, discover, insideRepoReal, mapLimit, pathKey } from "./server/git.mjs";
-import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normTermHeight, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
-import { ensureLocalNodePty, loadNodePty } from "./server/pty.mjs";
-import { createTerminalPool } from "./server/terminal-pool.mjs";
+import { GROUP_MODES, SORT_MODES, normPattern, normPatternMap, normStrings, normWidths, numOr, prefsPayload } from "./server/prefs.mjs";
 import { repoSummary, resolveOptions } from "./server/repos.mjs";
 import { stopRegexWorker } from "./server/regex-match.mjs";
 
 import { createSearchActions } from "./server/actions/search.mjs";
-import { createTerminalActions } from "./server/actions/terminal.mjs";
 import { createViewActions } from "./server/actions/views.mjs";
 import { createWriteActions } from "./server/actions/write.mjs";
 import { definePlugin } from "./sdk/index.mjs";
 
 
 /** The plugin's own version, read from manifest.json: a hard-coded copy went stale (the ready log said
- * 0.8.1 while the manifest said 0.10.0). It travels with every scan reply as `serverVersion`; no client gates
- * on it — a server too old for term-attach/term-sync answers with an unknown-request error and the strip
- * falls back to a plain term-open — so it is there for whoever needs to notice a stale running server. */
+ * 0.8.1 while the manifest said 0.10.0). It travels with every scan reply as `serverVersion`. */
 function loadPluginVersion() {
 	try {
 		const here = dirname(fileURLToPath(import.meta.url));
@@ -191,30 +181,6 @@ export default definePlugin({
 			}
 		}
 
-		/* ---------------- full terminal (PTY bridge) ---------------- */
-		let ptyMod = null;
-		try {
-			ptyMod = loadNodePty();
-		} catch (err) {
-			/**
-			 * The host's own copy is the fast path (same ConPTY machinery) but it is not a documented
-			 * contract; host.ensureDeps is. Off the activation path on purpose — a first install
-			 * compiles native code, and until it lands the strip says "cannot start a shell".
-			 */
-			host.log("warn", "no host node-pty — trying a plugin-local install", err?.message ?? String(err));
-			void ensureLocalNodePty(host).then((mod) => {
-				if (!mod) return;
-				ptyMod = mod;
-				host.log("info", "node-pty (plugin-local) ready — the terminal strip is available");
-			});
-		}
-		/**
-		 * The terminal pool itself lives in server/terminal-pool.mjs — it is per-activation state, and the
-		 * entry only wires it up. `getPty` is read lazily: a plugin-local node-pty install can still land
-		 * after activation, and the strip has to start working when it does.
-		 */
-		const terminal = createTerminalPool({ getPty: () => ptyMod, host, resolveRepo });
-
 		// The action handlers, grouped by concern. They receive the per-message values as arguments and the
 		// activation state through ctx, so the dispatch below is a lookup rather than a chain of comparisons.
 		const actionTable = new Map([
@@ -222,7 +188,6 @@ export default definePlugin({
 				createViewActions({ SYNC_LOG_LIMIT, TIMELINE_DEFAULT_DAYS, TIMELINE_MAX_ENTRIES, TIMELINE_PER_REPO, basename, insideRepo: insideRepoReal, known, reply, resolveRepo }),
 			),
 			...Object.entries(createSearchActions({ SEARCH_MAX_PER_FILE, SEARCH_MAX_PER_REPO, SEARCH_MAX_TOTAL, SEARCH_PICKAXE_LIMIT, SEARCH_QUERY_MAX, basename, known, reply })),
-			...Object.entries(createTerminalActions({ reply, ...terminal })),
 			...Object.entries(createWriteActions({ basename, fetching, join, known, lastScan, pulling, reply, resolveRepo, stat, unlink })),
 		]);
 
@@ -245,12 +210,8 @@ export default definePlugin({
 					if (Number.isFinite(Number(payload.autoRefreshSec))) {
 						host.storage.set("autoRefreshSec", numOr(payload.autoRefreshSec, DEFAULT_AUTO_REFRESH_SEC, 0, 600));
 					}
-					if (typeof payload.termVisible === "boolean") host.storage.set("termVisible", payload.termVisible);
 					const newWidths = normWidths(payload.widths);
 					if (newWidths) host.storage.set("widths", newWidths);
-					// The terminal strip's top edge is draggable, so its height is view state too. `null`
-					// (double-click reset) is stored as "no override" rather than as a number.
-					if ("termHeight" in payload) host.storage.set("termHeight", normTermHeight(payload.termHeight));
 					if (SORT_MODES.includes(payload.sort)) host.storage.set("sort", payload.sort);
 					if (GROUP_MODES.includes(payload.group)) host.storage.set("group", payload.group);
 					if (Array.isArray(payload.collapsed)) host.storage.set("collapsed", normStrings(payload.collapsed));
@@ -341,14 +302,6 @@ export default definePlugin({
 					"multi-git:branches-all": "branches-all",
 					"multi-git:blame": "blame",
 					"multi-git:compare": "compare",
-					"multi-git:term-attach": "term-attach",
-					"multi-git:term-clear": "term-clear",
-					"multi-git:term-close": "term-close",
-					"multi-git:term-detach": "term-detach",
-					"multi-git:term-input": "term-input",
-					"multi-git:term-open": "term-open",
-					"multi-git:term-resize": "term-resize",
-					"multi-git:term-sync": "term-sync",
 				};
 				reply(from, {
 					action: "multi-git:data",
@@ -366,7 +319,6 @@ export default definePlugin({
 			// Switching projects switches the scan root: drop caches and let open views rescan.
 			known.value = new Map();
 			generation++; // a scan still in flight belongs to the previous project
-			terminal.killEveryTerminal("cwd-changed"); // every shell's cwd belongs to the old workspace
 			lastScan.value = null;
 			host.broadcast({ action: "multi-git:cwd", cwd: host.cwd });
 		});
@@ -376,7 +328,6 @@ export default definePlugin({
 		return () => {
 			offMessage();
 			offCwd();
-			terminal.killEveryTerminal("deactivate");
 			void stopRegexWorker();
 		};
 	},

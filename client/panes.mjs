@@ -1,5 +1,5 @@
 /**
- * The pane construction: the header controls, the three panes, the terminal, the diff viewer and the
+ * The pane construction: the header controls, the three panes, the diff viewer and the
  * dividers. It owns the elements; the entry destructures them back, so the rest of mount() is unchanged.
  */
 
@@ -139,26 +139,11 @@ for (const def of TAB_DEFS) {
 	tabs.append(btn);
 }
 const headRight = h("div", "mg-pane-head-right");
-const termToggle = h("button", "mg-term-btn", "Terminal");
-termToggle.type = "button";
-termToggle.title = "Show / hide the command terminal (runs in the selected repo)";
-headRight.append(tabs, termToggle);
+headRight.append(tabs);
 detailHead.append(detailTitle, headRight);
 const detailInfo = h("div", "mg-repo-meta");
 const detailList = h("div", "mg-list");
-const termEl = h("div", "mg-term");
-termEl.style.display = "none";
-const termHead = h("div", "mg-term-head");
-const termTitle = h("span", "mg-term-title", "terminal");
-const termClear = h("button", "mg-term-clear", "✕");
-termClear.type = "button";
-termClear.title = "Clear terminal output";
-termHead.append(termTitle, termClear);
-const termHost = h("div", "mg-term-host");
-const termHint = h("div", "mg-term-hint", "the shell starts when a repository is selected");
-const termGrip = h("div", "mg-term-grip"); // the strip's top edge: drag / arrow keys resize it
-termEl.append(termGrip, termHead, termHost, termHint);
-detailPane.append(detailHead, detailInfo, detailList, termEl);
+detailPane.append(detailHead, detailInfo, detailList);
 
 const diffPane = h("div", "mg-pane mg-pane-fixed mg-diff");
 const diffHead = h("div", "mg-pane-head");
@@ -174,5 +159,5 @@ body.append(reposPane, split1, detailPane, split2, diffPane);
 const foot = h("div", "mg-foot");
 root.append(head, body, foot);
 
-	return { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termGrip, termHead, termHint, termHost, termTitle, termToggle };
+	return { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, };
 }

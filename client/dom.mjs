@@ -177,5 +177,10 @@ function withoutBranchPrefix(subject, branch) {
 	return rest || text;
 }
 
-	return { h, chip, metaRow, pathParts, countsSpan, copyPathButton, fileBadge, gutterGeometry, gutterCells, collectByClass, optKey, unquoteGitPath, stripAb, samePath, statusKind, lineClass, withoutBranchPrefix };
+	return { h, chip, metaRow, pathParts, countsSpan, copyPathButton, fileBadge, gutterGeometry, gutterCells, collectByClass, optKey, unquoteGitPath, stripAb, samePath, statusKind, lineClass, withoutBranchPrefix, errText };
+}
+
+/** Why a failure reads as text: this helper lived in the terminal module, and the Workspace tab still reports a refused pattern with it. */
+export function errText(err) {
+	return String((err && err.message) || err || "unknown error");
 }

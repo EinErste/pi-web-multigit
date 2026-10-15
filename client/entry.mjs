@@ -15,7 +15,6 @@ import { createDom } from "./dom.mjs";
 import { CSS, createLayout } from "./layout.mjs";
 import { createLists } from "./lists.mjs";
 import { createSearch } from "./search.mjs";
-import { createTerminal } from "./terminal.mjs";
 import { createTimeline } from "./timeline.mjs";
 import { createWorkspace } from "./workspace.mjs";
 import { createPanes } from "./panes.mjs";
@@ -24,18 +23,11 @@ const PLUGIN_ID = "multi-git";
 const REQUEST_TIMEOUT_MS = 60_000;
 /** Fetching every repo is a network round-trip per repo: allow it far more time than a local call. */
 const FETCH_TIMEOUT_MS = 180_000;
-/**
- * A terminal that failed to start is retried automatically (an un-reloaded plugin server or a
- * scan that had not landed yet both heal by themselves), but not on every render: the pane is
- * re-rendered by each auto-refresh tick, and each retry builds and tears down an xterm.
- * An explicit toggle clears the record and retries immediately.
- */
-const TERM_RETRY_MS = 20_000;
 
-/** Test seam: the DOM stub tests inject fake xterm classes here so the real
- * vendor bundle is never imported/constructed outside a browser. The client
- * bundle itself stays import-free of anything outside `client/`. */
-const _testSeam = { termClasses: null, groupBranches, branchGroupKey };
+/** Test seam: the DOM stub tests inject fakes here so the real client bundle is never
+ * imported/constructed outside a browser. The client bundle itself stays import-free of
+ * anything outside `client/`. */
+const _testSeam = { groupBranches, branchGroupKey };
 /**
  * Which branches belong together across repositories.
  *
@@ -142,7 +134,7 @@ export default defineView({
 		const state = {
 			repos: [],
 			cwd: "",
-			prefs: { hideClean: false, autoRefreshSec: 15, termVisible: false, termHeight: null, widths: null },
+			prefs: { hideClean: false, autoRefreshSec: 15, widths: null },
 			scannedAt: 0,
 			truncated: false,
 			error: null,
@@ -251,64 +243,6 @@ export default defineView({
 					settle(msg);
 				}
 			}
-			/* streaming pushed by the terminal bridge (no reqId) */
-			if (msg.kind === "term-data" && state.termActive && samePath(msg.repo, state.termRepo)) {
-				try {
-					state.termActive.write(msg.data);
-					// The pane has now rendered up to the cursor the server sent with this chunk: keep it, so
-					// coming back to this repository syncs from here rather than replaying the whole window.
-					noteRendered(msg.repo, msg.cursor);
-				} catch {
-					/* terminal died underneath us */
-				}
-				return;
-			}
-			if (msg.kind === "term-resync" && state.termActive && samePath(msg.repo, state.termRepo)) {
-				// This client fell further behind than the server's window holds: replace what is on screen
-				// with the window it hands over, then re-anchor so streaming resumes from its end.
-				try {
-					state.termActive.reset?.();
-					state.termActive.write(typeof msg.data === "string" ? msg.data : "");
-					noteRendered(msg.repo, msg.cursor);
-				} catch {
-					/* terminal died underneath us */
-				}
-				// The reply carries what the shell printed while this hand-off was in flight; applying it is
-				// the difference between a seamless resync and a hole in the pane.
-				void request("term-sync", { repo: msg.repo, cursor: Number(msg.cursor) || 0 }).then((res) => {
-					if (destroyed || !state.termActive || !samePath(msg.repo, state.termRepo)) return;
-					try {
-						if (res?.resync) {
-							state.termActive.reset?.();
-							if (typeof res.data === "string" && res.data) state.termActive.write(res.data);
-						} else if (res?.ok && typeof res.data === "string" && res.data) {
-							state.termActive.write(res.data);
-						}
-						/**
-						 * Only now record it: the pane has rendered up to this cursor. Recording it before the guard above
-						 * marked bytes this pane never received as rendered, so its next catch-up asked for the delta past
-						 * them — a hole in the pane that nothing fills until a later resync re-sends the whole window. The
-						 * resync push above already recorded the window this pane did render, so a pane that moved on in
-						 * the meantime still re-syncs from what it really has.
-						 */
-						if (res?.cursor != null) noteRendered(msg.repo, res.cursor);
-					} catch {
-						/* terminal died underneath us */
-					}
-				});
-				return;
-			}
-			// The pane records its own exit: `state.termExited` below is the view's *current* pane, so a shell that
-			// dies while another repository is selected would otherwise be forgotten (see showTerm).
-			if (msg.kind === "term-exit") markExited(msg.repo);
-			if (msg.kind === "term-exit" && state.termActive && samePath(msg.repo, state.termRepo) && !state.termExited) {
-				state.termExited = true;
-				termTitle.textContent = `terminal · ${shortName(state.termRepo ?? "")} · exited`;
-				try {
-					state.termActive.write(`\r\n\u001b[90m[process exited]\u001b[0m\r\n`);
-				} catch {}
-				return;
-			}
 		});
 
 
@@ -334,7 +268,7 @@ export default defineView({
 			FILE_STATUS,
 			state,
 		});
-		const { h, chip, metaRow, pathParts, countsSpan, copyPathButton, fileBadge, gutterGeometry, gutterCells, collectByClass, optKey, unquoteGitPath, stripAb, samePath, statusKind, lineClass, withoutBranchPrefix } = dom;
+		const { h, chip, metaRow, pathParts, countsSpan, copyPathButton, fileBadge, gutterGeometry, gutterCells, collectByClass, optKey, unquoteGitPath, stripAb, samePath, statusKind, lineClass, withoutBranchPrefix, errText } = dom;
 
 		// panes: panes.mjs. Every element the view uses comes from here; destructuring keeps the names
 		// below in scope, so the rest of mount() is unchanged.
@@ -347,7 +281,7 @@ export default defineView({
 			setTab,
 			state,
 		});
-		const { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs, termClear, termEl, termGrip, termHead, termHint, termHost, termTitle, termToggle } = panes;
+		const { body, chips, cleanBox, cleanLabel, clearBtn, detailHead, detailInfo, detailList, detailPane, detailTitle, diffActions, diffBody, diffHead, diffPane, diffTitle, fetchBtn, filterInput, foot, groupSel, head, headBar, headRight, headTop, listGroup, pullBtn, refreshBtn, refreshSel, regexBtn, reposCount, reposHead, reposList, reposPane, root, scanGroup, searchBtn, searchGroup, searchInput, searchMode, sortSel, spacer, split1, split2, statusCwd, statusDirty, statusRepos, statusScan, style, sub, tabButtons, tabs } = panes;
 		container.append(style, root);
 
 		// search: search.mjs. Destructuring its result keeps the names below in
@@ -391,23 +325,6 @@ export default defineView({
 		});
 		const { timelineFilters, renderTimelineList, ensureTimeline } = timeline;
 
-		// terminal: terminal.mjs. Destructuring its result keeps the names below in
-		// scope, so the rest of mount() is unchanged.
-		const terminal = createTerminal({
-			PLUGIN_ID,
-			TERM_RETRY_MS,
-			_testSeam,
-			ctx,
-			destroyed,
-			request: (...args) => fwd.request(...args), // client/bridge.mjs
-			shortName,
-			state,
-			termHint,
-			termHost,
-			termTitle,
-		});
-		const { injectTermCss, ensureTermClasses, sendTermResize, fitTerm, showTermHint, errText, failTerminal, markExited, noteRendered, openTerminal, disposeTerminals, syncTerminal } = terminal;
-
 		// workspace: workspace.mjs. Destructuring its result keeps the names below in
 		// scope, so the rest of mount() is unchanged.
 		const workspace = createWorkspace({
@@ -419,7 +336,7 @@ export default defineView({
 			detailList,
 			diffBody,
 			diffTitle,
-			errText: (...args) => fwd.errText(...args), // client/terminal.mjs
+			errText, // client/dom.mjs
 			groupBranches,
 			h,
 			isPickedBranch: (...args) => fwd.isPickedBranch(...args), // client/lists.mjs
@@ -699,18 +616,13 @@ export default defineView({
 			detailPane,
 			detailHead,
 			diffPane,
-			fitTerm: (...args) => fwd.fitTerm(...args), // client/terminal.mjs
 			reposPane,
 			savePrefs: (...args) => fwd.savePrefs(...args), // client/bridge.mjs
 			shortName,
 			splitterCleanup,
 			state,
-			syncTerminal: (...args) => fwd.syncTerminal(...args), // client/terminal.mjs
-			termEl,
-			termTitle,
-			termToggle,
 		});
-		const { applyLayout, setupSplitter, setupTermGrip, splitBounds } = layout;
+		const { applyLayout, setupSplitter, splitBounds } = layout;
 			fwd.addDiffAction = detail.addDiffAction;
 			fwd.addPatchActions = detail.addPatchActions;
 			fwd.applyLayout = layout.applyLayout;
@@ -719,9 +631,7 @@ export default defineView({
 			fwd.clearSearch = search.clearSearch;
 			fwd.commitRow = lists.commitRow;
 			fwd.ensureTimeline = timeline.ensureTimeline;
-			fwd.errText = terminal.errText;
 			fwd.fileRow = lists.fileRow;
-			fwd.fitTerm = terminal.fitTerm;
 			fwd.isPickedBranch = lists.isPickedBranch;
 			fwd.patchOpts = detail.patchOpts;
 			fwd.renderBlame = workspace.renderBlame;
@@ -746,19 +656,6 @@ export default defineView({
 			fwd.showHistoryForFile = lists.showHistoryForFile;
 			fwd.stashRow = lists.stashRow;
 			fwd.syncControls = lists.syncControls;
-			fwd.syncTerminal = terminal.syncTerminal;
-
-		/* ---------------- full terminal (xterm client + node-pty server) ---------------- */
-		// Boxed: the terminal view assigns it and mount's cleanup disconnects it.
-		const termResizeObs = { value: null };
-		state.termActive = null;
-		state.termFit = null;
-		state.termRepo = null;
-		state.termExited = false;
-		state.termClasses = null;
-		state.termFailedRepo = null;
-		state.termFailedAt = 0;
-
 
 		/* ---------------- wiring ---------------- */
 		searchInput.addEventListener("keydown", (ev) => {
@@ -806,35 +703,8 @@ export default defineView({
 			regexBtn.style.display = state.searchMode === "pickaxe" ? "none" : "";
 			if (state.searchActive) submitSearch();
 		};
-		termToggle.onclick = () => {
-			state.prefs.termVisible = !state.prefs.termVisible;
-			state.termFailedAt = 0; // an explicit toggle always retries, no throttle
-			applyLayout();
-			void savePrefs({ termVisible: state.prefs.termVisible });
-		};
-		termClear.onclick = () => {
-			if (state.termActive) {
-				try {
-					state.termActive.clear();
-				} catch {
-					/* already gone */
-				}
-			}
-			// Clear the retained window as well: otherwise a remount would replay text the user just cleared.
-			if (state.termRepo) void request("term-clear", { repo: state.termRepo });
-		};
 		setupSplitter(split1, 0);
 		setupSplitter(split2, 1);
-		setupTermGrip(termGrip);
-		window.addEventListener("resize", fitTerm);
-		if (typeof ResizeObserver !== "undefined") {
-			try {
-				termResizeObs.value = new ResizeObserver(() => fitTerm());
-				termResizeObs.value.observe(termHost);
-			} catch {
-				/* no ResizeObserver (tests, old browsers) — window resize still fits */
-			}
-		}
 		root.addEventListener("keydown", onKeyDown);
 		document.addEventListener("visibilitychange", onVisibility);
 
@@ -860,14 +730,6 @@ export default defineView({
 			offData();
 			pending.clear();
 			style.remove();
-			// Unmount: drop every pane, keep every shell (the server pools them; the next mount adopts).
-			disposeTerminals();
-			if (termResizeObs.value) {
-				try {
-					termResizeObs.value.disconnect();
-				} catch {}
-			}
-			window.removeEventListener("resize", fitTerm);
 			root.remove();
 		};
 	},

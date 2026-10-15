@@ -10,9 +10,6 @@ export function prefsPayload(opts) {
 		maxRepos: opts.maxRepos,
 		autoRefreshSec: opts.autoRefreshSec,
 		hideClean: opts.hideClean,
-		termVisible: opts.termVisible,
-		termHeight: opts.termHeight, // null = the stylesheet's default strip height
-		termKeep: opts.termKeep, // the client caps its cached xterm panes with the same number
 		widths: opts.widths,
 		sort: opts.sort,
 		group: opts.group,
@@ -103,27 +100,6 @@ export function oneOf(value, allowed, fallback) {
 export const SORT_MODES = ["name", "status", "recent", "drift"];
 
 export const GROUP_MODES = ["none", "prefix", "branch"];
-
-/**
- * Terminal-strip height. The runtime clamp also respects the height of the pane the strip sits in;
- * these bounds are the storage-side sanity check, so a hand-edited storage.json cannot lock the
- * strip into a size the user cannot drag back out of. null = "use the stylesheet default".
- */
-export const TERM_MIN = 120;
-
-export const TERM_MAX = 1200;
-
-/** Live repository shells kept at once (the `termKeep` setting). 16 is the host's own live-terminal cap. */
-export const TERM_KEEP_DEFAULT = 5;
-
-export const TERM_KEEP_MAX = 16;
-
-export function normTermHeight(value) {
-	if (value === null || value === undefined) return null;
-	const n = Number(value);
-	if (!Number.isFinite(n)) return null;
-	return Math.min(TERM_MAX, Math.max(TERM_MIN, Math.round(n)));
-}
 
 export const WIDTH_MIN = 140;
 

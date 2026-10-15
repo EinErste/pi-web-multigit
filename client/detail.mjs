@@ -57,7 +57,7 @@ export function createDetail(deps) {
 
 /* ---------------- middle pane ---------------- */
 function renderDetail() {
-	applyLayout(); // pane widths + terminal visibility/title follow repo/prefs state
+	applyLayout(); // pane widths follow repo/prefs state
 	if (state.searchActive) {
 		renderSearch();
 		return;

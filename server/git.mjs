@@ -13,7 +13,8 @@ import { readdir } from "node:fs/promises";
 import { relative } from "node:path";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
-import { isWindows } from "./pty.mjs";
+/** Windows needs ConPTY-free shell-free exec handling (was shared with the removed terminal module). */
+export const isWindows = process.platform === "win32";
 
 export const execFileAsync = promisify(execFile);
 

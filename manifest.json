@@ -2,7 +2,7 @@
 	"id": "pi-web-multigit",
 	"name": "Multi-repo Git",
 	"version": "0.13.7",
-	"description": "Overview of every Git repository in the workspace — changes, diffs, history, branches, stashes, timeline, cross-repo search. Read-only except three deliberate writes: Fetch, Pull (fast-forward only) and per-file Rollback, plus a full PTY terminal (the same shell the host's Terminal tab uses) and resizable panes.",
+	"description": "Overview of every Git repository in the workspace — changes, diffs, history, branches, stashes, timeline, cross-repo search. Read-only except three deliberate writes: Fetch, Pull (fast-forward only) and per-file Rollback.",
 	"apiVersion": 2,
 	"icon": "🌿",
 	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"18\" r=\"3\"/><circle cx=\"6\" cy=\"6\" r=\"3\"/><circle cx=\"18\" cy=\"6\" r=\"3\"/><path d=\"M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9\"/><path d=\"M12 12v3\"/></svg>",
@@ -54,15 +54,6 @@
 			"type": "boolean",
 			"label": "Show only dirty repos by default",
 			"default": false
-		},
-		{
-			"key": "termKeep",
-			"type": "number",
-			"label": "Terminals kept open",
-			"default": 5,
-			"min": 1,
-			"max": 16,
-			"hint": "How many repository shells stay alive at once. Switching repositories parks a shell instead of closing it, so coming back finds it still running with its output where it left off; past this many, the least recently used one is closed and its output stays replayable. 16 matches the host's own live-terminal limit."
 		}
 	]
 }
